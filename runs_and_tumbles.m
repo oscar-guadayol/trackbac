@@ -15,7 +15,9 @@ function [run_lengths, run_speeds, run_angle_deviation, ...
 %
 %       FrameRate is the sampling rate of the video in frames per second.
 %
-%       angle_threshold (optional) is the threshold (in radians) for a
+%       angle_threshold (optional) is the threshold (in radians) for
+%       aGamar1$!
+
 %           change in direction to be considered a tumble. If empty, a
 %           theoretical angle threshold is calculated using
 %           brownian_thresholds.
@@ -68,9 +70,10 @@ function [run_lengths, run_speeds, run_angle_deviation, ...
 %           current track, and the first and second columns are the indexes
 %           at which each particular run starts and ends respectevely.
 %
-%       tumbles is a MX2 matrix where M is the number of tumbles detected in the
-%           current track, and the first and second columns are the indexes
-%           at which each particular tumble starts and ends respectevely.
+%       tumbles is a MX2 matrix where M is the number of tumbles detected
+%           in the current track, and the first and second columns are the
+%           indexes at which each particular tumble starts and ends
+%           respectevely.
 %
 %       time is a vector with the time in seconds of the track.
 %
@@ -83,9 +86,8 @@ function [run_lengths, run_speeds, run_angle_deviation, ...
 % [run_lengths, run_speeds, run_angle_deviation, ...
 %     tumble_times, tumble_angles, tumble_angular_velocities,...
 %     speeds, angular_velocities, runs, tumbles, time] =...
-%     runs_and_tumbles(track, FrameRate, angle_threshold, speed_threshold,...
-%     minimum_run_length, a, b, method, win_length)%
-%
+%     runs_and_tumbles(track, FrameRate, [], [],...
+%     minimum_run_length, a, b, 'mean', win_length);
 % 
 %  Copyright (C) 2016,  Oscar Guadayol
 %  oscar_at_guadayol.cat
@@ -156,9 +158,7 @@ speeds = sqrt(x.^2+y.^2);
 % change in position of the centroid is used.
 
 if a/b>3
-    
-    % this changes the -90 to 90 degrees output from the
-    % regionprops órientation'into a 0 to 180 degrees
+        % this changes the -90 to 90 degrees output from the    % regionprops órientation'into a 0 to 180 degrees
     track(track(:,12)>0,12) = 180-track(track(:,12)>0,12);
     track(track(:,12)<0,12) = -track(track(:,12)<0,12);
     
@@ -259,43 +259,21 @@ if ~isempty(runs)
     end
 end
 
-%% Track smoothing
-    function ftrack = smooth_track(track, win_length, method)
-        % Smooths track with a running mean, median or maximum according to value
-        % of variable method with a window length equal to win_length.
-        
-
-        method = char(method);
-        padded_track = padarray(track,win_length,'replicate');
-        ftrack = nan(size(padded_track));
-        
-        if strcmp(method, 'mean') && win_length > 1
-            ftrack = filtfilt(ones(1,win_length)/win_length,1,padded_track);
-            
-        elseif strcmp(method, 'median') && win_length > 1
-            ftrack = medfilt1(padded_track,win_length);
-        elseif strcmp(method, 'max') &&  win_length > 1
-            for ii = win_length:length(padded_track)-win_length
-                ftrack(ii,:) = nanmax(padded_track(ii-(win_length-1)/2:ii+(win_length-1)/2,:));
-            end
-        end
-    end
-    ftrack = ftrack(win_length+1:end-win_length,:);
-
 %% Brownian thresholds
     function [angle, displacement] = brownian_thresholds(a,b, time_step, p_value)
         
-        % Given an ellipsoid of revolution of semiaxis a and b, calculates the
-        % maximum angle of rotational diffusivity around minor semiaxis b and the
-        % maximum linear displacement (in m) along the major semiaxis a expectable
-        % from brownian motion on a given time step.
+        % Given an ellipsoid of revolution of semiaxis a and b, calculates
+        % the maximum angle of rotational diffusivity around minor semiaxis
+        % b and the maximum linear displacement (in m) along the major
+        % semiaxis a expectable from brownian motion on a given time step.
         %
         % input variables:
         %       a and b are the semiaxis of the ellipsoid in meters
         %       time_step is the time between successive observations
         %       p_value (optional) is the probability of occurrance of a
-        %           rotational angle wider than the threshold_angle. Default=
-        %           1-99.7300204/100 (the probability of 3 standard deviations)
+        %           rotational angle wider than the threshold_angle.
+        %           Default= 1-99.7300204/100 (the probability of 3
+        %           standard deviations)
         %
         % output variables:
         %
@@ -312,7 +290,8 @@ end
         
         
         % %% With flagellar stabilization, in Mitchell 2002 fashion
-        % [ft_flagellum,fr_flagellum, ~, ~]  = theoretical_friction_coefficients(7.8*1e-6/2,0.2*1e-6/2,0.2*1e-6/2, 33);
+        % [ft_flagellum,fr_flagellum, ~, ~]  =...
+        % theoretical_friction_coefficients(7.8*1e-6/2,0.2*1e-6/2,0.2*1e-6/2, 33);
         %
         % T = 33; % temperature
         % k_b = 1.38e-23; % Boltzmann constant (J/K)

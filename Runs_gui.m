@@ -65,8 +65,7 @@ run_lines = [];
 tumble_lines = [];
 Run_lengths = [];
 Run_speeds = [];
-Run_angle_deviation = [];
-Run_cos_deviation = [];
+Run_angle_deviations = [];
 Tumble_times = [];
 Tumble_angles = [];
 Tumble_angular_velocities = [];
@@ -274,7 +273,8 @@ end
                 fns =  load(char(fns), 'fns');
                 fns = fns.fns;
             else
-                [tracks,moving, percentage_moving] = merge_tracks(fns);
+                [tracks,moving, percentage_moving] =...
+                    merge_tracks(fns, win_length);
             end
         else
             [tracks,moving, percentage_moving] = merge_tracks(fns);
@@ -356,13 +356,13 @@ end
     function process_all(varargin)
         method = methods_list(get(P(10),'Value'));
         minimum_run_length = str2double(get(P(8),'String'));
-        [Run_lengths, Run_speeds, Run_angle_deviation, Run_cos_deviation,...
+        [Run_lengths, Run_speeds, Run_angle_deviations,...
             Tumble_times, Tumble_angles, Tumble_angular_velocities,...
             Cell_area, Cell_length, Cell_width, Cell_eccentricity, ...
             Cell_equi_diam, Cell_perimeter, Cell_solidity,...
             StartTimes, fig_tracks] = ...
             Runs(tracks(:,:,:), fns, [], [], win_length,...
-            minimum_run_length, method, FrameRate, 0, 1, 0);
+            minimum_run_length, method, FrameRate, 1, 0);
     end % function process_all
 
 %% stats
@@ -466,7 +466,7 @@ end
         fn = fullfile(pn, fn);
         [~, ~, ext] = fileparts(fn);
         if strcmp(ext, '.mat')
-            save(fn, 'Run_lengths', 'Run_speeds', 'Run_angle_deviation',...
+            save(fn, 'Run_lengths', 'Run_speeds', 'Run_angle_deviations',...
                 'Tumble_times', 'Tumble_angles', 'Tumble_angular_velocities',...
                 'Cell_area', 'Cell_length', 'Cell_width',...
                 'Cell_eccentricity', 'Cell_equi_diam','Cell_perimeter', 'Cell_solidity',...
@@ -499,18 +499,18 @@ end
         minimum_run_length = str2double(get(P(8),'String'));
         track = tracks(:,:,tt);
         Geometries = load(fns{tracks(1,end-1,tt)},'Boundaries', 'Centroids');
-        dimensions_offset = 0; % offset bewteen the dimensions obtained with phase contrast and those from electon microscope
+        dimensions_offset = 0.7670; % offset bewteen the dimensions obtained with phase contrast and those from electon microscope
         a = (nanmedian(track(:,15))-dimensions_offset)*1e-6;
 %         b = (nanmedian(track(:,17))-dimensions_offset)*1e-6;
-        b = 0.7*1e-6;
+        b = 0.71*1e-6;
         
         track = tracks(:,:,tt);
         time = (0:1/FrameRate:(size(track,1)-1)/FrameRate)';
         time(isnan(track(:,5)),:) = [];
         track(isnan(track(:,6)),:) = [];
         Geometries = load(fns{tracks(1,end-1,tt)},'Boundaries', 'Centroids');
-        [~, ~, ~, ~, ~, ~, ~, speeds, angular_velocities, runs, tumbles, time] =...
-            runs_and_tumbles(track, FrameRate, angle_threshold, speed_threshold, minimum_run_length, a, b, method, win_length, '', 0, 0);                
+        [~, ~, ~, ~, ~, ~, speeds, angular_velocities, runs, tumbles, time] =...
+            runs_and_tumbles(track, FrameRate, angle_threshold, speed_threshold, minimum_run_length, a, b, method, win_length);                
         track_plot % calls ploting        
     end % function runs_and_tumbles(varargin)
 

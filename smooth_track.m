@@ -4,7 +4,7 @@ function ftrack = smooth_track(track, win_length, method)
 %
 % input variables:
 %
-%       track is 
+%       track is
 %       win_length is the window length (in frames) of the smoothing
 %           algorithm.
 %
@@ -64,7 +64,7 @@ function ftrack = smooth_track(track, win_length, method)
 %     particle_detection(fn, '', 'scaling',...
 %       2.75, 'boundary_threshold', 100, 'frame_range', [1,100])
 %
-% 
+%
 %  Copyright (C) 2016,  Oscar Guadayol
 %  oscar_at_guadayol.cat
 %
@@ -72,24 +72,24 @@ function ftrack = smooth_track(track, win_length, method)
 %  This program is free software; you can redistribute it and/or modify it
 %  under the terms of the GNU General Public License, version 3.0, as
 %  published by the Free Software Foundation.
-% 
+%
 %  This program is distributed in the hope that it will be useful, but
 %  WITHOUT ANY WARRANTY; without even the implied warranty of
 %  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
 %  General Public License for more details.
-% 
+%
 %  You should have received a copy of the GNU General Public License along
 %  with this program.  If not, see <http://www.gnu.org/licenses/>.
-% 
+%
 %  This file is part of trackbac, a collection of matlab scripts to
 %  geometrically characterize and track swimming bacteria imaged by a
 %  phase-contrast microscope.
 
 method = char(method);
 padded_track = padarray(track,win_length,'replicate');
-
-if strcmp(method, 'mean') && win_length > 1    
-     ftrack = filtfilt(ones(1,win_length)/win_length,1,padded_track);   
+ftrack = nan(size(padded_track));
+if strcmp(method, 'mean') && win_length > 1
+    ftrack = filtfilt(ones(1,win_length)/win_length,1,padded_track);
 elseif strcmp(method, 'median') && win_length > 1
     ftrack = medfilt1(padded_track,win_length);
 elseif strcmp(method, 'max') &&  win_length > 1
@@ -97,5 +97,5 @@ elseif strcmp(method, 'max') &&  win_length > 1
         ftrack(ii,:) = nanmax(padded_track(ii-(win_length-1)/2:ii+(win_length-1)/2,:));
     end
 end
-
 ftrack = ftrack(win_length+1:end-win_length,:);
+end

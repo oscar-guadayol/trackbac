@@ -1,10 +1,13 @@
-function [tracks, moving, percentage_moving] = merge_tracks(fns)
+function [tracks, moving, percentage_moving] = merge_tracks(fns, win_length)
 % This function merges all the tracks from the list of mat files in fns,
 % and adds a column to the 'tracks' variable with the filename number.
 %
 % input variables:
 %
 %       fns is a cell array in which e;ements are the mat files full paths.
+%
+%       win_length is a scalar with the length (in frames) of the moving
+%           average window applied to the x y positions of the track. 
 %
 % output variables:
 %
@@ -44,7 +47,8 @@ function [tracks, moving, percentage_moving] = merge_tracks(fns)
 % loads the data form the different files into B structure, and retrieves
 % the size of the track matrix in each file
 if isempty(fns)
-    [fns, pathname, ~] = uigetfile('multiselect','on',[pwd, filesep,  '*.mat']);
+    [fns, pathname, ~] =...
+        uigetfile('multiselect','on',[pwd, filesep,  '*.mat']);
     fns = fullfile(pathname, fns);
 end % if isempty(fns)
 
@@ -52,15 +56,17 @@ if ischar(fns)
     fns = {fns};
 end
 
-dim = nan(3,length(fns)); %
+dim = nan(3,length(fns));
 for bb = 1:length(fns)
     B{bb} = load(fns{bb});
     if ~isfield(B{bb},'Boundaries')
-        warning(['particle_detection script has not been run on ' fns{bb} '; skipping file'])
+        warning(['particle_detection script has not been run on '...
+            fns{bb} '; skipping file'])
         continue
     end
     if ~isfield(B{bb},'tracks')
-        warning(['track_select.m script has not been run on ' B{bb}.fn '; skipping file'])
+        warning(['track_select.m script has not been run on '...
+            B{bb}.fn '; skipping file'])
         continue
     end
     dim(1,bb) = size(B{bb}.tracks,1);
@@ -72,25 +78,25 @@ end
 % maximum track length encountered in all the fns, the 2nd dimension is the
 % number of columns per track plus 1 for the filenumber, and 3rd is the
 % total numebr of tracks in all the files together.
-d=0;
+d = 0;
 tracks = nan(nanmax(dim(1,:)),19,nansum(dim(3,:)));
 for tt = 1:length(fns)
-    tracks(1:dim(1,tt), 1:17,d+1:d+dim(3,tt)) = B{tt}.tracks(:,1:17,:);
-    tracks(1:dim(1,tt), 18  ,d+1:d+dim(3,tt)) =  tt; % *ones(dim(1,tt),1,dim(3,tt)); % adds a column with the filename number
+    tracks(1:dim(1,tt), 1:17, d+1:d+dim(3,tt)) = B{tt}.tracks(:,1:17,:);
+    tracks(1:dim(1,tt), 18, d+1:d+dim(3,tt)) =  tt; % adds a column with the filename number
     if isfield('B', 'StartTime')
-        tracks(1:dim(1,tt), 19  ,d+1:d+dim(3,tt)) =  B{tt}.StartTime;  % adds a column with the time f file creation
+        tracks(1:dim(1,tt), 19, d+1:d+dim(3,tt)) = B{tt}.StartTime;  % adds a column with the time f file creation
     elseif isfield('B', 'ext') || ~isempty(regexp(B{tt}.ext, 'tif', 'once'))
         [fp, fn] = fileparts(char(fns(tt)));
         V = imfinfo([fp filesep fn '.tif']);
         StartTime = datenum(V(1).ImageDescription(33:52));
-        tracks(1:dim(1,tt), 19  ,d+1:d+dim(3,tt)) =  StartTime;  % adds a column with the time f file creation
+        tracks(1:dim(1,tt), 19, d+1:d+dim(3,tt)) = StartTime;  % adds a column with the time f file creation
     end
     d = d + dim(3,tt);
 end
 
 load(fns{1},'FrameRate')
 
-[moving, percentage_moving] = moving_tracks(tracks, FrameRate, 0);
+[moving, percentage_moving] = moving_tracks(tracks, FrameRate, win_length);
 
 %% saving
 saving_dialog = questdlg('Save merged file?');
