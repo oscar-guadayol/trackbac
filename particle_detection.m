@@ -15,14 +15,14 @@ function [Boundaries, Centroids, Geometries, fn, boundary_threshold, ...
 %       path_name is the pathname (optional). If empty, and fn has no path,
 %           it opens a dialog to select file.
 %
-%       Scaling in pixels/µm (optional). If no input , data will be
+%       scaling in pixels/microm (optional). If no input , data will be
 %           expressed in pixels;
 %
 %       boundary_threshold (optional) is the minimum pixel intensity in a
 %           grayscale (0-255) of the boundaries of a particle. If no value
 %           is given, the function threshold_level function is called.
 %
-%       particle_thresholds (optional) is the minimum pixel intensity in a
+%       particle_threshold (optional) is the minimum pixel intensity in a
 %           grayscale (0-255) that a particle needs to have to be included
 %           in the analyses. If no value is given, the function
 %           threshold_level function is called.
@@ -37,7 +37,7 @@ function [Boundaries, Centroids, Geometries, fn, boundary_threshold, ...
 %          to cut off information.
 %
 %       FrameRate (optional) is the frame rate of the video. If empty,
-%       information is retrieved from the avi.
+%           information is retrieved from the avi.
 %
 %       background is the average frame that is substracted from each frame
 %           to get rid of non moving particles and noise.
@@ -46,8 +46,15 @@ function [Boundaries, Centroids, Geometries, fn, boundary_threshold, ...
 %           video after substracting the background and adding the mean
 %           limits of the de-backgrounded images for histogram
 %           equalization.
-% 
-%       denoise is a logical variable. Id true, each frame is denoised.
+%
+%       complement is a logical variable. If true, images are inverted
+%           using imcomplement. Useful for light particles on dark field,
+%           such as fluorescent images. Default is false.
+%
+%       noholes is a logic variable. If true, bwboundaries searches for
+%           object (parent and child) boundaries. This can provide better
+%           performance. If false, bwboundaries searches for both object
+%           and hole boundaries. Default is false.
 %
 %       minimum_radius is the radius in µm of the smallest particle to be
 %           considered a cell. Default is 0.5 µm
@@ -65,10 +72,12 @@ function [Boundaries, Centroids, Geometries, fn, boundary_threshold, ...
 %          x and y in pixelds of the centroids of the particles.
 %
 %       Geometries is a cell array of size (NumberofFramesX1), in which
-%          each cell is a NX8 matrix, N being the number of particles.
+%          each cell is a NX11 matrix, N being the number of particles.
 %          Columns are area, MajorAxisLength, MinorAxisLength,
 %          eccentricity, equivDiameter, orientation, perimeter and solidity
-%          of each particle as defined in function regionprops.
+%          of each particle as defined in function regionprops, and
+%          arc_length, minimum distance between poles, and width. Units are
+%          pix
 %
 %       fn is the filename.
 %
@@ -121,10 +130,19 @@ function [Boundaries, Centroids, Geometries, fn, boundary_threshold, ...
 %  You should have received a copy of the GNU General Public License along
 %  with this program.  If not, see <http://www.gnu.org/licenses/>.
 % 
-%  This file is part of trackbac, a collection of matlab scripts to
+%  This files is part of trackbac, a collection of matlab scripts to
 %  geometrically characterize and track swimming bacteria imaged by a
-%  phase-contrast microscope.
+%  phase-contrast microscope
 
+%% warnings
+warning('error', 'MATLAB:rankDeficientMatrix');
+warning('error', 'MATLAB:singularMatrix')
+warning('off','MATLAB:inpolygon:ModelingWorldLower')
+spmd % apply warning supressions to all workers
+    warning('error', 'MATLAB:rankDeficientMatrix');
+    warning('error', 'MATLAB:singularMatrix')
+    warning('off','MATLAB:inpolygon:ModelingWorldLower')
+end
 
 %% Parses input arguments and loads data %%
 
@@ -138,7 +156,8 @@ addParameter(p,'FrameRate',[],@isnumeric);
 addParameter(p,'background',[],@isnumeric);
 addParameter(p,'maxV',[],@isnumeric);
 addParameter(p,'minV',[],@isnumeric);
-addParameter(p,'denoise',[],@islogical);
+addParameter(p,'complement',[],@islogical);
+addParameter(p,'noholes',[],@islogical);
 addParameter(p,'minimum_radius',[],@isnumeric);
 
 parse(p,varargin{:});
@@ -161,12 +180,17 @@ background = p.Results.background;
 minV = p.Results.minV;
 maxV = p.Results.maxV;
 
-if isempty(p.Results.denoise)
-    denoise = true;
+if isempty(p.Results.complement)
+    complement = false;
 else
-    denoise = p.Results.denoise;
+    complement = p.Results.complement;
 end
 
+if isempty(p.Results.noholes)
+    noholes = false;
+else
+    noholes = p.Results.noholes;
+end
 
 if isempty(p.Results.minimum_radius)
     minimum_radius = 0.5;
@@ -174,13 +198,12 @@ else
     minimum_radius = p.Results.minimum_radius;
 end
 
-
 % selects video file
 if isempty(fn)
     if isempty(path_name)
         path_name = pwd;
     end
-    [fn, path_name] = uigetfile('*.avi; *.tif', 'Choose an avi or tiff file', path_name);
+    [fn, path_name] = uigetfile('*.avi; *.tif; *.tif; *info.mat', 'Choose an avi, tiff or mat file', path_name);
     fn = strcat(path_name,fn);    
     [~,fn] = fileattrib(fn);
     fn = fn.Name;
@@ -188,13 +211,17 @@ end
 
 % changes \ to / to make it readable by fileparts in all systems
 fn = strrep(fn, '\', filesep);
-
+ 
 if ~isempty(path_name)
     [~, fn, ext] = fileparts(fn);
 else
     [path_name, fn, ext] = fileparts(fn);
 end
-
+if strcmp(ext,'.mat')
+    outfile = fullfile(path_name,[fn(1:end-5) '.mat']);
+else
+    outfile = fullfile(path_name,[fn '.mat']);
+end
 if isempty(scaling)
     warning('No scaling input. Data will be expressed in pixels')
     scaling = 1;
@@ -202,26 +229,47 @@ end
 
 if strcmpi(ext,'.avi')
     V = VideoReader(fullfile(path_name, [fn, ext]))
-    l = get(V,'NumberOfFrames'); % number of frames in video
+    l = V.Duration*V.FrameRate;
     if isempty(FrameRate)
         FrameRate = get(V,'FrameRate');
     end
-    StartTime = [];
-elseif strcmpi(ext, '.tif')
+    StartTime = V.CurrentTime;
+    if V.CurrentTime==0
+        StartTime = dir(fullfile(path_name, [fn, ext]));
+        StartTime = StartTime.datenum;
+    end
+elseif strcmpi(ext, '.tif') ||strcmpi(ext, '.tiff') 
     V = imfinfo(fullfile(path_name, [fn, ext]))
     
     % retrieves time information from multitiff captured using HCImage Live
     % software. Other software may need a different aproach to get the
     % times and frame rates.
-    ImageDescription = char(V.ImageDescription);
-    StartTime = datenum(V(1).ImageDescription(33:52));
-    [~,tt0] = regexp(ImageDescription(1,:),'Time_From_Start = ');
-    time = ImageDescription(:,tt0+1:tt0+13);
-    time = datenum(time);
-    l = size(V,1); % number of frames in video
-    if isempty(FrameRate)
-        FrameRate = 1/mean(diff(time))/24/3600;
+ 
+    if ~isempty(regexp(V(1).ImageDescription,'Hamamatsu', 'once'))
+        ImageDescription = char(V.ImageDescription);
+        StartTime = datenum(V(1).ImageDescription(33:52));
+        [~,tt0] = regexp(ImageDescription(1,:),'Time_From_Start = ');
+        time = ImageDescription(:,tt0+1:tt0+13);
+        time = datenum(time);
+        if isempty(FrameRate)
+            FrameRate = 1/mean(diff(time))/24/3600;
+        end
+    else
+        StartTime = datenum(V(1).FileModDate);
+        if isempty(FrameRate)
+            FrameRate = 1;
+        end
+        time = (0:size(V,1)-1)/FrameRate;
     end
+    l = size(V,1); % number of frames in video
+    
+elseif strcmpi(ext, '.mat')
+    path_name = [path_name, filesep];
+    load([path_name,fn])
+    StartTime = datenum(V.ImageDescription(33:52));
+    time = V.time;
+    l = size(V.time,1);
+    FrameRate = 1./mean(diff(time));
 end
 
 %% selects frames in the given range
@@ -239,22 +287,28 @@ else
 end
 
 %% minimum area, in pixels, a bacteria of 1µm radius would have
-minimum_area = floor((pi*(minimum_radius*scaling)^2));
+minimum_area = round((pi*(minimum_radius*scaling)^2))*2;
 
 %% Computes mean value of the whole movie to later on substract it from each frame.
 % This gets rid of all noise as well as of all particles that are not
 % moving. It also calculates the limits of the de-backgrounded images for
 % later histogram equalization
 if any([isempty(background), isempty(maxV), isempty(minV)])
-    [background, maxV, minV] = video_background(V, frames, pixels_range, 'median',ext);
+    [background, maxV, minV] = video_background(V, path_name, fn, frames, pixels_range, 'median',ext, complement);
 end
+
+save(outfile,'ext', 'fn', 'frames',...
+    'background', 'minV',...
+    'maxV', 'FrameRate','scaling', 'pixels_range', 'StartTime','-v7.3')
 
 %% Determination of thresholds
 if all([isempty(boundary_threshold),isempty(boundary_threshold)]) ||...
         all([isnan(boundary_threshold),isnan(boundary_threshold)])
     [boundary_threshold, particle_threshold] = threshold_level(V,...
-        background, maxV, minV, frames, minimum_area, pixels_range, denoise);
+        background, maxV, minV, frames, minimum_area, pixels_range,...
+        scaling, complement, noholes, ext);
 end
+save(outfile,'boundary_threshold', 'particle_threshold', 'StartTime','-append')
 
 %% Finds particles in each frame, and calculates geometrical parameters of each one
 Boundaries = cell(l,1);
@@ -265,32 +319,82 @@ if ~isnan(boundary_threshold)
     Boundaries = cell(length(frames),1);
     Centroids = cell(length(frames),1);
     Geometries = cell(length(frames),1);
-    
     N = length(frames);
-    parfor_progress(N);
     
-    parfor ff = frames % frame
-        I = [];
-        if strcmpi(ext,'.avi')
+    if isempty(gcp('nocreate'))
+        c = parcluster;
+        parpool(c.NumWorkers);
+    end
+
+    if strcmpi(ext,'.avi')
+        parfor_progress(N);
+        parfor ff = frames % frame
+            V = VideoReader(fullfile(path_name, [fn, ext]));
+            I = [];
             I = read(V,ff);
-        elseif strcmpi(ext, '.tif')
+            if complement
+                I = imcomplement(I);
+            end
+            I = I(pixels_range(1,1):pixels_range(1,2),...
+                pixels_range(2,1):pixels_range(2,2));
+            [I, ~] = image_normalization(I, background, minV, maxV, scaling);
+            if ~isnan(boundary_threshold)
+                % identifies only particles without holes
+                [Boundaries{ff}, Centroids{ff}, Geometries{ff}]=...
+                    bwboundaries_noholes(I, boundary_threshold,...
+                    particle_threshold, minimum_area, false);
+            end
+            parfor_progress;
+        end
+        
+    elseif strcmpi(ext, '.tif') ||strcmpi(ext, '.tiff') 
+        parfor_progress(N);
+        parfor ff = 1:frames(end) % frame
+            I = [];
             I = imread(V(1).Filename,ff);
+            if V(1).BitDepth==16
+                if ~isempty(regexp(V(1).ImageDescription,'Hamamatsu', 'once')) || V(1).BitDepth==12
+                    I = uint8(bitshift(I,-4)); % in fact, when the V.Bitdepth =16 in a hamamatsu multitif,the bitdepth=12
+                else
+                    I = uint8(I);
+                end
+            end
+            if complement
+                I = imcomplement(I);
+            end
+            I = I(pixels_range(1,1):pixels_range(1,2),...
+                pixels_range(2,1):pixels_range(2,2));
+            [I, ~] = image_normalization(I, background, minV, maxV, scaling);
+            if ~isnan(boundary_threshold)
+                % identifies only particles without holes
+                [Boundaries{ff}, Centroids{ff}, Geometries{ff}]=...
+                    bwboundaries_noholes(I, boundary_threshold,...
+                    particle_threshold, minimum_area, false);
+            end
+            parfor_progress;
         end
-        I = I(pixels_range(1,1):pixels_range(1,2),...
-            pixels_range(2,1):pixels_range(2,2));
-        I = image_normalization(I,background,minV,maxV, denoise);
-        if ~isnan(boundary_threshold)
-            % identifies only particles without holes
-            [Boundaries{ff}, Centroids{ff}, Geometries{ff}]=...
-                bwboundaries_noholes(I, boundary_threshold,...
-                particle_threshold, minimum_area, false);
-        end
-        parfor_progress;
+        
+    elseif strcmpi(ext, '.mat')
+        fns = dir([path_name fn(1:end-5),'*.png']);
+        parfor_progress(N);
+        parfor ff = frames
+            I = imread([path_name fns(ff).name]);
+            I = I(pixels_range(1,1):pixels_range(1,2),...
+                pixels_range(2,1):pixels_range(2,2));
+            [I, ~] = image_normalization(I,background,minV,maxV, scaling);
+            if ~isnan(boundary_threshold)
+                % identifies only particles without holes
+                [Boundaries{ff}, Centroids{ff}, Geometries{ff}]=...
+                    bwboundaries_noholes(I, boundary_threshold,...
+                    particle_threshold, minimum_area, false);
+            end
+            parfor_progress;
+        end            
     end
 end
 
-outfile = fullfile(path_name,[fn '.mat']);
+Geometries = cellfun(@single,Geometries,'UniformOutput', 0);
+Centroids = cellfun(@single,Centroids,'UniformOutput', 0);
+
 fn = fullfile(path_name,[fn ext]);
-save(outfile,'ext', 'Boundaries', 'Centroids', 'Geometries', 'fn', 'frames',...
-    'boundary_threshold', 'particle_threshold', 'background', 'minV',...
-    'maxV', 'FrameRate','scaling', 'pixels_range', 'StartTime','-v7.3')
+save(outfile,'Boundaries', 'Centroids', 'Geometries', 'fn','-append')

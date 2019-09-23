@@ -1,4 +1,4 @@
-function I = image_normalization(I, background, minI, maxI, denoise)
+function [pI, I] = image_normalization(I, background, minI, maxI, scaling)
 % Removes background, normalizes image to a 0-255 and subtracts noise
 %
 % input variables:
@@ -11,8 +11,7 @@ function I = image_normalization(I, background, minI, maxI, denoise)
 %       maxV and minV are the maximum and minimum intensity values of the
 %           video after substracting the background and adding the mean
 %           limits of the de-backgrounded images for histogram equalization
-% 
-%       denoise is a logical variable. Id true, each frame is denoised.
+%       scaling in pixels/µm
 %
 % output variables:
 %
@@ -45,19 +44,26 @@ function I = image_normalization(I, background, minI, maxI, denoise)
 %  geometrically characterize and track swimming bacteria imaged by a
 %  phase-contrast microscope
 
+%% Subtracts video background
+pI = double(I)-double(background) + min(double(background(:))); 
 
-% Subtracts video background
-I = double(I)-double(background) + min(double(background(:))); 
+%% Adjusts image intensity values
+pI = (pI-double(minI))*255/double(maxI-minI);
 
-% Adjusts image intensity values
-I = (I-double(minI))*255/double(maxI-minI);
+%% Bandpass filter to remove noise
+highpass_window = round(scaling*2);
+pI = bpass(imcomplement(uint8(pI)),1,highpass_window);
+pI = (pI -min(pI(:)))*255/double(max(pI(:))-min(pI(:)));
+pI = imcomplement(uint8(pI));
 
-% Removes noise
-if denoise
-    SE = strel('disk',4,4);
-    noise = imerode(imdilate(I,SE),SE);
-    I = I-noise;
-    I = (I-min(I(:)))*255/(max(I(:))-min(I(:)));
-end
-I = uint8(I);
+% adds a black frame around corresponding to what has been lost during
+% noise removal.
+pI(:,1:highpass_window) = 0;
+pI(1:highpass_window,:) = 0;
+pI(size(I,1)-highpass_window:end,:) = 0;
+pI(:,size(I,2)-highpass_window:end) = 0;
 
+I(:,1:highpass_window) = 0;
+I(1:highpass_window,:) = 0;
+I(size(I,1)-highpass_window:end,:) = 0;
+I(:,size(I,2)-highpass_window:end) = 0;

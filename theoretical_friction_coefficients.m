@@ -6,17 +6,22 @@ function [ft,fr, Dt, Dr]  = theoretical_friction_coefficients(a, b, c, T, S, eta
 % input variables:
 %
 %       a, b, c are the three semiaxes of the ellipsoid (in m)
-%       T is temperature in ºC. Default = 33
+%       T is temperature in Celsius. Default = 33
 %       S is salinity
 %       eta is the dynamic viscosity in kg/m/s. Default =  7.4889e-04
 %
 % output variables:
 %
-%       ft is a (3X1) vector of the translation friction coefficients
-%           parallel to each of the axes
+%       ft is a (4X1) vector of the translation friction coefficients
+%           parallel to each of the axes and the effective frictional
+%           coefficient calculated as the harmonic mean of the
+%           coefficients of each of the three orthogonal angles (Dusenbery
+%           2009, Appendix 6).
 %       fr is a (3X1) vector of the rotational friction coefficients
 %           about each of the axes
-%       Dt is a (3X1) vector of the translational diffusivities
+%       Dt is a (4X1) vector of the translational diffusivities plus the
+%           diffusion averaged over all orientations (Dusenbery
+%           2009, Appendix 6).
 %       Dr is a (3X1) vector of the translational diffusivities
 %
 %
@@ -53,43 +58,54 @@ if nargin<5 || isempty(S)
     S = 0;
 %    eta = SW_Viscosity(T,'C',0,'ppt');
 end
-if nargin<6 || isempty(eta) 
-   eta = SW_Viscosity(T,'C',S,'ppt'); % kg/m-s
+if nargin<6 || isempty(eta)
+    eta = SW_Viscosity(T,'C',S,'ppt'); % kg/m-s
 end
-k_b = 1.38e-23; % Boltzmann constant (J/K)
+
+a = a(:);
+b = b(:);
+c = c(:);
+
+k_b = 1.38e-23; % Boltzmann constant (J/K) or (m^2 kg s^-2 K^-1)
 K = T+273.15; % temperature in Kelvins
 
-% Integrals for flow around ellipsoids (Dusenberry, appendix 6
+%% Integrals for flow around ellipsoids (Dusenberry 2009, appendix 6)
 
 Sint = @(x) ((a.^2 + x).*(b.^2 + x).*(c.^2 + x)).^(-0.5);
-S = integral(Sint,0,Inf);
+S = integral(Sint,0,Inf,'ArrayValued',true);
 
-r = [a; b; c];
-Gint = @(x) ((a.^2 + x).*(b.^2 + x).*(c.^2 + x)).^(-0.5) .* 1./(r.^2 + x);
+r = [a, b, c];
+Gint = @(x) ((repmat(a,1,3).^2 + x).*(repmat(b,1,3).^2 + x).*(repmat(c,1,3).^2 + x)).^(-0.5) .* 1./(r.^2 + x);
 G_E = r.^2 .* integral(Gint,0,Inf,'ArrayValued',true);
 
-H_Ea = (G_E(2)+G_E(3))/(b^2+c^2); % Dusenberry 1998
-H_Eb = (G_E(1)+G_E(3))/(a^2+c^2); % Dusenberry 1998
-H_Ec = (G_E(1)+G_E(2))/(a^2+b^2); % Dusenberry 1998
+H_Ea = (G_E(:,2)+G_E(:,3))./(b.^2+c.^2); % Dusenberry 1998
+H_Eb = (G_E(:,1)+G_E(:,3))./(a.^2+c.^2); % Dusenberry 1998
+H_Ec = (G_E(:,1)+G_E(:,2))./(a.^2+b.^2); % Dusenberry 1998
 
 %% transational
-ft(1) = 16*pi*eta/(S+G_E(1)); % parallel to axis a eq A6.10
+ft(:,1) = 16*pi*eta./(S+G_E(:,1)); % parallel to axis a eq A6.10
 % ft(1) = 16*pi*eta*(a^2-b^2)/((2*a^2-b^2)*S-2*a); % eq A6.11
 
-ft(2) = 16*pi*eta/(S+G_E(2)); %  parallel to axis b, eq A6.10
+ft(:,2) = 16*pi*eta./(S+G_E(:,2)); %  parallel to axis b, eq A6.10
 % ft(2) = 32*pi*eta*(a^2-b^2)/((2*a^2-3*b^2)*S+2*a); % eq A6.12
 
-ft(3) = 16*pi*eta/(S+G_E(3)); %  parallel to axis c, eq A6.10
+ft(:,3) = 16*pi*eta./(S+G_E(:,3)); %  parallel to axis c, eq A6.10
 % ft(3) = 32*pi*eta*(a^2-b^2)/((2*a^2-3*b^2)*S+2*a); % eq A6.12
 
+ft(:,4) = 3./sum(1./ft(:,1:3),2); % harmonic mean (Dusenbery 2009 appendix 6)
+
 % from fig 4.5 in Berg 1983
-% ft(1) = 8*pi*eta*(a)^3/3/(log(2*a/b)-1/2); %kg m^2 sec^-1
-% ft(1) = 8*pi*eta*a/(log(2*a/b)-1/2);
+% ft(1) = 4*pi*eta*a/(log(2*a/b)-1/2);
+% ft(2) = 8*pi*eta*a/(log(2*a/b)+1/2);
 
 %% rotational
-fr(1)= 16*pi*eta/3/H_Ea; % Friction constant for rotation about the major semiaxis
-fr(2)= 16*pi*eta/3/H_Eb; % Friction constant for rotation about the minor semiaxes
-fr(3)= 16*pi*eta/3/H_Ec; % Friction constant for rotation about the minor semiaxes
+fr(:,1)= 16*pi*eta/3./H_Ea; % Friction constant for rotation about the major semiaxis
+fr(:,2)= 16*pi*eta/3./H_Eb; % Friction constant for rotation about the minor semiaxes
+fr(:,3)= 16*pi*eta/3./H_Ec; % Friction constant for rotation about the minor semiaxes
+
+% from fig 6.7 in Berg 1983
+% fr(1) = 16/3*pi*eta*a*b^2; %kg m^2 sec^-1
+% fr(2) = 8*pi*eta*a^3/3/(log(2*a/b)-1/2); %kg m^2 sec^-1
 
 %% Difusion coefficients
 Dt =  k_b*K./ft;

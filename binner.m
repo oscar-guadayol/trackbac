@@ -60,20 +60,16 @@ end
 data(isnan(data(:,bincol)),:) = [];
 
 % Set initial parameters
-%%% bin vector and bin window
 binVector = (start:binsize:stop)';
 if isempty(binVector) || any(isnan(binVector))
     error('Start, Stop or binsize are not valid')
 end
-% if max(binVector)<max(data(:,bincol))
-%     binVector(end+1) = binVector(end)+binsize;
-% end
 
-%determines the minimum number of valid values acceptable to perform the
-%operation
+% Determines the minimum number of valid values acceptable to perform the
+% operation
 fs = mode(diff(data(:,bincol)));
 threshold = floor(binsize/fs*threshold);
-if isinf(threshold)
+if isinf(threshold) ||  isnan(threshold)
     threshold=1;
 end
 
@@ -91,45 +87,14 @@ end
 data((data(:,bincol)<(binVector(1))|data(:,1)>(binVector(end))),:) = [];
 
 % bin the data
-[foo,b] = histc(data(:,bincol),binVector);
-newdata = nan(size(binVector,1),size(data,2));
+[~,b] = histc(data(:,bincol),binVector);
+newdata = cast(nan(size(binVector,1),size(data,2)),'like',data);
 for ii = 1:size(data,2)
-%     new(:,i) = accumarray(b, data(:,ii), [], bintype);
-    newdata(:,ii) = accumarray(b(b>0),data(b>0,ii),size(binVector),bintype,nan);
+   newdata(:,ii) = accumarray(b(b>0),data(b>0,ii),size(binVector),bintype,cast(nan,'like',data));
+    
+    %removes bins that have less than the minimum accepted threshold
+    if threshold>0
+        C = accumarray(b(b>0), data(b>0,ii),[],@(x) sum(~isnan(x)));
+        newdata((C<threshold),ii) = nan;
+    end
 end
-
-%removes bins that have less than the minimum accepted threshold
-for ii = 1:size(data,2)
-    C = accumarray(b(b>0), data(b>0,ii),[],@(x) sum(~isnan(x)));
-    newdata((C<threshold),ii) = nan;
-end
-newdata(:,bincol) = [];
-
-
-%% alternatives
-% this does the same but for large matrices is a little slower
-% [~,b] = histc(data(:,bincol),binVector);
-% b = [repmat(b(:),size(data,2),1) kron(1:size(data,2),ones(1,numel(b))).'];
-% new = accumarray(b,data(:),[],bintype);
- 
-% [~,b] = histc(data(:,bincol),binVector);
-% new = nan(nbins,size(data,2));
-% for idx = 1:nbins
-%     m = find(b==idx);
-%     if isempty(m) == 1
-%         continue
-%     end
-%     new(idx,:) = bintype(data(m,:),1);
-% end
-% %%% set the bin column equal to the binning vector
-% new(:,bincol) = binVector;
-
-% [~,b] = histc(data(:,bincol),binVector);
-% for i = 1:nbins
-%     C{i} = data(b==i,:);
-% end %for
-% new = cellfun(bintype,C,'UniformOutput',0);
-
-
-
-

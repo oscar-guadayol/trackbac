@@ -1,6 +1,7 @@
-function fig = runs_and_tumbles_figure(Run_speeds, Run_lengths, Tumble_times, Tumble_angles, FrameRate, win_length, figure_export, figname)
-
-% Creates a figure with the frequency distribution of runs and tumbles in
+function fig = runs_and_tumbles_figure(Run_speeds, Run_lengths, Run_complete,...
+    Tumble_times, Tumble_angles, FrameRate, win_length, figure_export, figname)
+         
+% Creates a figure with the frequency  distribution of runs and tumbles in
 % the input tracks.
 %
 % Input variables:
@@ -63,21 +64,19 @@ function fig = runs_and_tumbles_figure(Run_speeds, Run_lengths, Tumble_times, Tu
 %  geometrically characterize and track swimming bacteria imaged by a
 %  phase-contrast microscope.
 
-
-
-
 fig = figure('position', [1 27 1920 950]);
 ax(1) = axes('position',[0.1 0.6 0.37 0.37]);
 ax(2) = axes('position',[0.55 0.6 0.37 0.37]);
 ax(3) = axes('position',[0.1 0.1 0.37 0.37]);
 ax(4) = axes('position',[0.55 0.1 0.37 0.37]);
 
-bin{1} = 0:win_length/FrameRate:4;
-bin{2} = 0:1:51;
-bin{3} = 0:win_length/FrameRate:4;
+bin{1} = 0:win_length/FrameRate:2;
+bin{2} = 0:1:ceil(max(Run_speeds(:,2)));
+bin{3} = 0:win_length/FrameRate:2;
 
-h{1} = histc(Run_lengths(:,2), bin{1});
+h{1} = histc(Run_lengths(logical(Run_complete(:,2)),2), bin{1});
 h{2} = histc(Run_speeds(:,2),bin{2});
+% h{2} = histc(Run_speeds(logical(Run_complete(:,2)),2),bin{2});
 h{3} = histc(Tumble_times, bin{3});
 
 bar(ax(1), bin{1}+0.1,h{1}./(sum(h{1}))*100,1,'FaceColor',[1 1 1],'EdgeColor',[0 0 0])
@@ -85,23 +84,19 @@ bar(ax(2), bin{2}+0.1,h{2}./(sum(h{2}))*100,1,'FaceColor',[1 1 1],'EdgeColor',[0
 bar(ax(3), bin{3}+0.1,h{3}./(sum(h{3}))*100,1,'FaceColor',[1 1 1],'EdgeColor',[0 0 0])
 
 [tout,rout] = rose(Tumble_angles,24);
-polar(ax(4),0,22,'-k') % sets the axis limit
+polar(ax(4),0,30,'-k') % sets the axis limit
 hold(ax(4),'on')
 h{4} = polar(ax(4),tout, rout./(sum(rout)/2)*100,'k');
 
 set(fig,'position', [250   148   600   475])
 
 %% fits exponential distributions
-P{1} = fitdist(Run_lengths(~isnan(Run_lengths(:,2)),2),'exponential');
+P{1} = fitdist(Run_lengths(logical(Run_complete(:,2)),2),'exponential');
 hold(ax(1),'on')
 plot(ax(1),bin{1}(1:end-1)+0.1,diff(expcdf(bin{1}, P{1}.mu))*100,'k')
 
-% P{2} = fitdist(Run_speeds(:,2),'weibull');
-% P{2} = fitdist(Run_speeds(:,2),'normal');
 P{2} = fitdist(Run_speeds(:,2),'lognormal');
 hold(ax(2),'on')
-% plot(ax(2),bin{2}(1:end-1)+0.5,diff(cdf('weibull',bin{2},P{2}.A,P{2}.B))*100,'r')
-% plot(ax(2),bin{2}(1:end-1)+0.5,diff(cdf('normal',bin{2},P{2}.mu,P{2}.sigma))*100,'r')
 plot(ax(2),bin{2}(1:end-1)+0.5,diff(cdf('lognormal',bin{2},P{2}.mu,P{2}.sigma))*100,'k')
 
 P{3} = fitdist(Tumble_times(~isnan(Tumble_times)),'exponential');
@@ -111,54 +106,33 @@ plot(ax(3),bin{3}(1:end-1)+0.1,diff(expcdf(bin{3}, P{3}.mu))*100,'k')
 xlabel(ax(1), 'Run time (s)', 'fontsize', 10);
 ylabel(ax(1), 'frequency (%)', 'fontsize', 10);
 ylabel(ax(1), 'frequency (%)', 'fontsize', 10);
-xlabel(ax(2), 'Run speed (µm s^{-1})', 'fontsize', 10);
+xlabel(ax(2), 'Run speed (\mum s^{-1})', 'fontsize', 10);
 xlabel(ax(3), 'Tumble time (s)', 'fontsize', 10);
 ylabel(ax(3), 'frequency (%)', 'fontsize', 10);
 ylabel(ax(4), 'frequency (%)', 'fontsize', 10);
-ylabel(ax(4), 'Tumble angle (º)', 'fontsize', 10);
+ylabel(ax(4), 'Tumble angle (^o)', 'fontsize', 10);
 
-set(ax(1),'xlim', [min(Run_lengths(:,2)) 4]);
-set(ax(2),'xlim', [0 50]);
-set(ax(3),'xlim', [0 4]);
-set(ax(1),'ylim', [0 70]);
-set(ax(2),'ylim', [0 15]);
-set(ax(3),'ylim', [0 60]);
+ax(1).XLim = [min(Run_lengths(logical(Run_complete(:,2)),2)) 4];
+ax(2).XLim(1) = 0;
 view(ax(4),90, -90)
 
-% text(range(get(ax(1),'xlim'))*.45,range(get(ax(1),'ylim'))*.45,...
-%     ['N = ', num2str(sum(~isnan(Run_lengths(:,2)))), sprintf('\n'),...
-%     '\mu = ', num2str(P{1},2), 's'],...
-%     'parent',ax(1))
-% % text(range(get(ax(2),'xlim'))*.5,range(get(ax(2),'ylim'))*.75,...
-% %     ['N = ', num2str(sum(~isnan(Run_lengths(:,2)))), sprintf('\n'),...
-% %     'µ = ', num2str(P{2}.mu,4), 'm s^{-1}', sprintf('\n'),...
-% %     '\sigma= ', num2str(P{2}.sigma,3), 'm s^{-1}'],'parent', ax(2))
-% text(range(get(ax(2),'xlim'))*.45,range(get(ax(2),'ylim'))*.45,...
-%     ['N = ', num2str(sum(~isnan(Run_lengths(:,2)))), sprintf('\n'),...
-%     'µ = ', num2str(exp(P{2}.mu+P{2}.sigma^2/2),4), 'µm s^{-1}', sprintf('\n'),...
-%     '\sigma= ', num2str(sqrt(exp(2*P{2}.mu+P{2}.sigma^2)*(exp(P{2}.sigma^2)-1)),3), 'µm s^{-1}'],'parent', ax(2))
-% text(range(get(ax(3),'xlim'))*.45,range(get(ax(3),'ylim'))*.45,...
-%     ['N = ', num2str(size(Tumble_angles(~isnan(Tumble_angles)),1)), sprintf('\n'),...
-%     'µ = ', num2str(P{3},2), 's'],...
-%     'parent',ax(3))
-
 text(0.5, 0.5,...
-    ['N = ', num2str(sum(~isnan(Run_lengths(:,2)))), sprintf('\n'),...
-    'µ = ', num2str(nanmean(Run_lengths(:,2)),2), 's', sprintf('\n'),...
-    '\sigma= ', num2str(nanstd(Run_lengths(:,2)),2), 's'],...
+    ['N = ', num2str(sum(~isnan(Run_lengths(logical(Run_complete(:,2)),2)))), newline,...
+    '\mu = ', num2str(nanmean(Run_lengths(logical(Run_complete(:,2)),2)),2), 's', newline,...
+    '\sigma= ', num2str(nanstd(Run_lengths(logical(Run_complete(:,2)),2)),2), 's'],...
     'Units', 'normalized',...
     'fontsize',8,...
     'parent',ax(1))
 text(0.5, 0.5,...
-    ['N = ', num2str(sum(~isnan(Run_lengths(:,2)))), sprintf('\n'),...
-    'µ = ', num2str(nanmean(Run_speeds(:,2)),4), 'µm s^{-1}', sprintf('\n'),...
-    '\sigma= ', num2str(nanstd(Run_speeds(:,2)),3), 'µm s^{-1}'],...
+    ['N = ', num2str(sum(~isnan(Run_speeds(:,2)))), newline,...
+    '\mu = ', num2str(nanmean(Run_speeds(:,2)),4), '\mum s^{-1}', newline,...
+    '\sigma= ', num2str(nanstd(Run_speeds(:,2)),3), '\mum s^{-1}'],...
     'Units', 'normalized',...
     'fontsize',8,...
-    'parent',ax(2))   
+    'parent',ax(2))  
 text(0.5, 0.5,...
-    ['N = ', num2str(size(Tumble_angles(~isnan(Tumble_angles)),1)), sprintf('\n'),...
-     'µ = ', num2str(nanmean(Tumble_times),2), 's', sprintf('\n'),...
+    ['N = ', num2str(size(Tumble_angles(~isnan(Tumble_angles)),1)), newline,...
+     '\mu = ', num2str(nanmean(Tumble_times),2), 's', newline,...
     '\sigma= ', num2str(nanstd(Tumble_times),2), 's'],...
     'Units', 'normalized',...
     'fontsize',8,...
@@ -179,25 +153,6 @@ text(0.88, 0.90,'D',...
     'Units', 'normalized',...
     'fontsize',20,...
     'parent',ax(4))   
-
-% 
-% text(range(get(ax(1),'xlim'))*.8850,range(get(ax(1),'ylim'))*.905,...
-%     'A',...,
-%     'fontsize',20,...
-%     'parent',ax(1))
-% text(range(get(ax(2),'xlim'))*.8850,range(get(ax(2),'ylim'))*.905,...
-%     'B',...,
-%     'fontsize',20,...
-%     'parent',ax(2))
-% text(range(get(ax(3),'xlim'))*.8850,range(get(ax(3),'ylim'))*.905,...
-%     'C',...,
-%     'fontsize',20,...
-%     'parent',ax(3))
-% text(range(get(ax(4),'xlim'))*0.405,range(get(ax(4),'ylim'))*0.41,...
-%     'D',...,
-%     'fontsize',20,...
-%     'parent',ax(4))
-
 
 %% figure export
 if figure_export
@@ -221,8 +176,4 @@ if figure_export
     plot_style.Format = 'jpeg';
     hgexport(fig,[fp,fn,'.jpg'],plot_style)
     
-    % plot_style.Resolution = '600';
-    % plot_style.Renderer = 'zbuffer';
-    % plot_style.Format = 'tiff';
-    % hgexport(fig,figname,plot_style)
 end

@@ -86,16 +86,21 @@ function ftrack = smooth_track(track, win_length, method)
 %  phase-contrast microscope.
 
 method = char(method);
-padded_track = padarray(track,win_length,'replicate');
-ftrack = nan(size(padded_track));
+padded = true;
+if padded
+    track = padarray(track,win_length,'replicate');
+end
+
 if strcmp(method, 'mean') && win_length > 1
-    ftrack = filtfilt(ones(1,win_length)/win_length,1,padded_track);
+    ftrack = filtfilt(ones(1,win_length)/win_length,1,double(track));
 elseif strcmp(method, 'median') && win_length > 1
-    ftrack = medfilt1(padded_track,win_length);
+    ftrack = medfilt1(track,win_length);
 elseif strcmp(method, 'max') &&  win_length > 1
-    for ii = win_length:length(padded_track)-win_length
-        ftrack(ii,:) = nanmax(padded_track(ii-(win_length-1)/2:ii+(win_length-1)/2,:));
+    for ii = win_length:length(track)-win_length
+        ftrack(ii,:) = nanmax(track(ii-(win_length-1)/2:ii+(win_length-1)/2,:));
     end
 end
-ftrack = ftrack(win_length+1:end-win_length,:);
+
+if padded
+    ftrack = ftrack(win_length+1:end-win_length,:,:);
 end

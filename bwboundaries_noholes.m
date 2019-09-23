@@ -1,5 +1,5 @@
 function [boundaries, centroid, geometries] = bwboundaries_noholes(...
-    I, boundary_threshold, particle_threshold, minimum_area, noholes)
+    I, boundary_threshold, particle_threshold, minimum_area, noholes, curvature, spirality)
 
 % Detects particles in an 8 bit image that are above an intensity
 % threshold.
@@ -15,13 +15,20 @@ function [boundaries, centroid, geometries] = bwboundaries_noholes(...
 %           a grayscale (0-255) that a particle needs to have to be
 %           included in the analyses.
 %
-%       minimum_area is the minimum area in pixels, bacteria of 1µm radius
-%           would have.
+%       minimum_area is the minimum area, in pixels, that a bacterium of
+%           1 micron radius would have.
 %
 %       noholes is a logic variable. If true, bwboundaries searches for
 %           object (parent and child) boundaries. This can provide better
 %           performance. If false, bwboundaries searches for both object
 %           and hole boundaries.
+%
+%       curvature is a logic variable. If true, bwboundaries calculates the
+%           radius of curvature of each particle. Default is false.
+%
+%       spirality is a logic variable. If true, bwboundaries calculates the
+%           amplitude and frequency of the cell by fitting a sinusoidal
+%           function. Default is false.
 %
 % output variables:
 %
@@ -33,10 +40,15 @@ function [boundaries, centroid, geometries] = bwboundaries_noholes(...
 %          detected within the frame, and the 2 columns represent (x,y)
 %          position in pixels of the centroids of the particles.
 %
-%       geometries is an NX8 matrix, N being the number of particles.
-%          Columns are area, MajorAxisLength, MinorAxisLength,
-%          eccentricity, equivDiameter, orientation, perimeter and solidity
-%          of each particle as defined in function regionprops.
+%       geometries is an NX17 matrix, N being the number of particles.
+%          Columns are area (1), MajorAxisLength (2), MinorAxisLength(3),
+%          eccentricity(4), ebestquivDiameter(5), orientation(6),
+%          perimeter(7) and solidity(8) of each particle as defined in
+%          function regionprops, and arc_length(9), minimum distance
+%          between poles(10), width(11), curvature radius(12:15) of the
+%          best fit circle with goodness of fit parameters (R^2, degres of
+%          freedom and RMSE), and amplitude(16) and frequency(17) of the
+%          best fit sinusoid.
 %
 % Called by particle_detection.m, threshold_level.m
 %
@@ -44,7 +56,7 @@ function [boundaries, centroid, geometries] = bwboundaries_noholes(...
 %
 % Ex.:[boundaries, centroid, geometries] = bwboundaries_noholes(...
 %       I, boundary_threshold, particle_threshold, minimum_area, noholes)
-% 
+%
 %  Copyright (C) 2016,  Oscar Guadayol
 %  oscar_at_guadayol.cat
 %
@@ -52,16 +64,16 @@ function [boundaries, centroid, geometries] = bwboundaries_noholes(...
 %  This program is free software; you can redistribute it and/or modify it
 %  under the terms of the GNU General Public License, version 3.0, as
 %  published by the Free Software Foundation.
-% 
+%
 %  This program is distributed in the hope that it will be useful, but
 %  WITHOUT ANY WARRANTY; without even the implied warranty of
 %  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
 %  General Public License for more details.
-% 
+%
 %  You should have received a copy of the GNU General Public License along
 %  with this program.  If not, see <http://www.gnu.org/licenses/>.
-% 
-%  This file is part of trackbac, a collection of matlab scripts to
+%
+%  This file is part of trackbac v1.1, a collection of matlab scripts to
 %  geometrically characterize and track swimming bacteria imaged by a
 %  phase-contrast microscope
 
@@ -69,59 +81,83 @@ centroid = [];
 geometries = [];
 boundaries = [];
 
+if ~exist('curvature') || isempty(curvature)
+    curvature = false;
+end
+if ~exist('spirality') || isempty(spirality)
+    spirality = false;
+end
+
 %% applies a median filter with a minimum_area window to remove noise
-win = round(sqrt(minimum_area)); % median filter window.
-I = medfilt2(I,[win win]);
 
-bw = im2bw(I,boundary_threshold/255);
+bw = imbinarize(I,boundary_threshold/255);
 bw = ~bw;
-
 bw = imclearborder(bw); % removes particles on the edges
 if ~any(bw(:))
     return
 end
-
 bw = bwareaopen(bw, minimum_area); % removes objects smaller than n pixels
 
 if ~noholes
-    [boundaries,L,n,A] = bwboundaries(bw);
-    %% removes particles that have a hole inside
-    donuts = nan(length(boundaries)-n,1);
-    for ii = 1:length(donuts)
-        donuts(ii) = find(A(ii+n,:));
+    [boundaries, L] = bwboundaries(bw);
+    bad = [];
+    v = cell2mat(cellfun(@(v) v(1,:), boundaries, 'UniformOutput',false));  % matrix with the first values in each boundary
+    for bb = 1:length(boundaries)
+        A = find(inpolygon(v(:,1),v(:,2),boundaries{bb}(:,1),boundaries{bb}(:,2)));
+        if numel(A)>1
+            bad = [bad; A];
+        end
     end
     
-    % removes holes
-    holes = (n+1:length(boundaries))';
+    % remove particles which minimum intensity is higher than the particle
+    % threshold
+    bad = [bad; setdiff((1:length(boundaries))', L(I<particle_threshold&L>0))];
+    for ii = 1:length(boundaries)
+        if ~any(I(L==ii)<particle_threshold)
+            bad = [bad; ii];
+        end
+    end
     
-    % marks particles in holes to be removed
-    bad = [holes;donuts];
+    boundaries(bad(:)) = [];
+    
+    central_lines = bwboundaries(bwmorph(bw,'thin', Inf));
+    v = cell2mat(cellfun(@(v) v(1,:), central_lines, 'UniformOutput',false)); % matrix with the first values in each central_lines
+    C = cellfun(@(x) find(inpolygon(v(:,1),v(:,2),x(:,1),x(:,2))), boundaries, 'UniformOutput',false);
+    central_lines = central_lines(cell2mat(C));
     
 else
     [boundaries,L] = bwboundaries(bw,'noholes');
     bad = [];
-end
-
-for ii = 1:length(boundaries)
-    if ~any(I(L==ii)<particle_threshold)
-        bad = [bad; ii];
+    
+    central_lines = bwboundaries(bwmorph(bw,'thin', Inf));
+    v = cell2mat(cellfun(@(v) v(1,:), central_lines, 'UniformOutput',false)); % matrix with the first values in each central_lines
+    C = cellfun(@(x) find(inpolygon(v(:,1),v(:,2),x(:,1),x(:,2)),1), boundaries, 'UniformOutput',false);
+    central_lines = central_lines(cell2mat(C));
+    
+    % remove particles which minimum intensity is higher than the particle
+    % threshold
+    bad = [bad; setdiff((1:length(boundaries))', L(I<particle_threshold&L>0))];
+    for ii = 1:length(boundaries)
+        if ~any(I(L==ii)<particle_threshold)
+            bad = [bad; ii];
+        end
     end
+    
+    boundaries(bad(:)) = [];
+    central_lines(bad(:)) = [];
 end
 
-boundaries(bad(:)) = [];
-central_lines = bwboundaries(bwmorph(bw,'thin', Inf));
-% central_lines(bad(:)) = [];
 if isempty(boundaries)
     return
 end
 
 %% geometrical characterization
 stats = regionprops(L, 'Centroid', 'Eccentricity', 'EquivDiameter', 'Area',...
-    'MajorAxisLength', 'MinorAxisLength','Orientation', 'Perimeter', 'Solidity');
+    'MajorAxisLength', 'MinorAxisLength','Orientation', 'Perimeter'); % remove solidity bevause it takes the most time in regionprops and I don't really use it. OG20170912
 stats(bad) = [];
 
 centroid = reshape([stats.Centroid],2,length(stats))';
-geometries = nan(length(stats),11);
+geometries = nan(length(stats),17);
 geometries(:,1) = [stats.Area]';
 geometries(:,2) = [stats.MajorAxisLength]';
 geometries(:,3) = [stats.MinorAxisLength]';
@@ -129,7 +165,6 @@ geometries(:,4) = [stats.Eccentricity]';
 geometries(:,5) = [stats.EquivDiameter]';
 geometries(:,6) = [stats.Orientation]';
 geometries(:,7) = [stats.Perimeter]';
-geometries(:,8) = [stats.Solidity]';
 
 % removes geometrical parameters from phantom regions generated in
 % bwboundaries_noholes
@@ -137,68 +172,76 @@ bad = [stats.Area]==0;
 centroid(bad,:) = [];
 geometries(bad,:) = [];
 
-% [central_lines,~] = bwboundaries(bwmorph(bw,'thin', Inf),'noholes');
-% central_lines(bad(:)) = [];
-% extension = ceil(scaling);
+%%
 extension = ceil(mean(geometries(:,2))/2);
-
-for ii=1:length(boundaries)
-    %% length
-    % boundaries and arc_lengths are sometimes mismatched. this looks for the right arc_length for each boundary
-    C = cellfun(@(x) inpolygon(x(1,1),x(1,2),boundaries{ii}(:,1),boundaries{ii}(:,2)),central_lines, 'UniformOutput',false);
-    jj = find(cell2mat(C));
+h = -ceil(extension/2):1:ceil(extension/2);
+for ii = 1:length(boundaries)
     
     % reorders arc length and removes repeated values
-    [~,m,~] = unique(num2str(central_lines{jj}),'rows');
-    M = central_lines{jj}(m,:);
-    
+    [~,m,~] = unique(central_lines{ii},'rows');
+    M = central_lines{ii}(m,:);
     
     if size(M,1)<2
         geometries(ii,9) = range(boundaries{ii}(boundaries{ii}(:,2)==min(boundaries{ii}(:,2))+floor(range(boundaries{ii}(:,2))/2),1));
         geometries(ii,10) = range(boundaries{ii}(boundaries{ii}(:,2)==min(boundaries{ii}(:,2))+floor(range(boundaries{ii}(:,2))/2),1));
         geometries(ii,11) = range(boundaries{ii}(boundaries{ii}(:,1)==min(boundaries{ii}(:,1))+floor(range(boundaries{ii}(:,1))/2),2));
+        geometries(ii,12:15) = nan;
     else
         % expands the arc_length to the boundaries
         ll = shortest_path(M);
-        len = find_arc_length(M(ll,:), boundaries{ii}, bw, 100);
-        %         len = filtfilt((1/5)*ones(1,5), 1, len); % smoothes the central line
+        len = find_arc_length(M(ll,:), boundaries{ii}, 100);
+        len = [len(1,:); M(ll,:); len(end,:)];
+        len([false; sum(diff(len).^2,2)==0],:) = []; % removes repeated consecutive pairs of values without resorting
         geometries(ii,9) = sum(sqrt(sum(diff(len).^2,2))); % arc length of the particle
         geometries(ii,10) = sqrt(sum((len(1,:)-len(end,:)).^2)); % minimum distance between poles of the particle
         
         %% width
         if size(len,1)>2
-            middle_point(1) = len(floor(size(len,1)/2),1)+len(floor(size(len,1)/2),1)-len(ceil(size(len,1)/2),1);
-            middle_point(2) = len(floor(size(len,1)/2),2)+len(floor(size(len,1)/2),2)-len(ceil(size(len,1)/2),2);
-            
-            if mod((size(len,1)/2),2)==0
-                middle_point(1) = len(size(len,1)/2,1)+(len(size(len,1)/2+1,1)-len(size(len,1)/2,1))/2;
-                middle_point(2) = len(size(len,1)/2,2)+(len(size(len,1)/2+1,2)-len(size(len,1)/2,2))/2;
-                alpha = atan2(...
-                    diff(len(size(len,1)/2:size(len,1)/2+1,2)),...
-                    diff(len(size(len,1)/2:size(len,1)/2+1,1)))...
-                    +pi/2;
-            else
-                middle_point = len(ceil(size(len,1)/2),:);
-                alpha = atan2(...
-                    len(ceil(size(len,1)/2)-1,2) - len(ceil(size(len,1)/2)+1,2),...
-                    len(ceil(size(len,1)/2)-1,1) - len(ceil(size(len,1)/2)+1,1))...
-                    +pi/2;
-            end
-            h = -ceil(extension/2):1:ceil(extension/2);
-            clear inter
-            [inter(:,1), inter(:,2)] = intersections(h.*cos(alpha) + middle_point(1),...
-                h.*sin(alpha) + middle_point(2),...
+            clear inter ilen
+            ilen = interp1([0; cumsum(sqrt(sum(diff(len).^2,2)))],len,0:0.1:(max(cumsum(sqrt(sum(diff(len).^2,2)))))','pchip');
+            %             [~,middlepoint] = min(sum(abs(len-repmat(ilen(floor(size(ilen,1)/2),:),size(len,1),1)),2));
+            [~,middlepoint] = min(sum((len(2:end-1,:)-repmat(ilen(floor(size(ilen,1)/2),:),size(len,1)-2,1)).^2,2));
+            middlepoint = middlepoint+1;
+            alpha = atan2(len(middlepoint-1,2) - len(middlepoint+1,2), len(middlepoint-1,1) - len(middlepoint+1,1))+pi/2;
+            [inter(:,1), inter(:,2)] = intersections(h.*cos(alpha) + len(middlepoint,1),...
+                h.*sin(alpha) + len(middlepoint,2),...
                 boundaries{ii}(:,1),boundaries{ii}(:,2));
-            inter = unique(round(inter*100)/100,'rows'); % removes duplicated intersections
+            
             geometries(ii,11) = mean(pdist(inter));
+        end
+        
+        %% Curvature
+        if curvature
+            [radius, ~, ~, R2, df, RMSE] = radius_of_curvature(len(:,1), len(:,2));
+            geometries(ii,12:15) = [radius-geometries(ii,11)/2,...
+                R2, df, RMSE];
+        else
+            geometries(ii,12:15) = nan;
+        end
+        
+        %% sinusoidal fit
+        if spirality
+            xy = central_lines{ii};
+            xy = xy(1:ceil(size(xy,1)/2),:);
+            s = warning('error', 'MATLAB:polyfit:RepeatedPointsOrRescale');
+            try
+                [amplitude, frequency, ~, ~] = sinusoidal(xy);
+                geometries(ii,16) = amplitude;
+                geometries(ii,17) = frequency;
+            catch
+                geometries(ii,16) = nan;
+                geometries(ii,17) = nan;
+            end
+            warning(s)
+        else
+            geometries(ii,16:17) = nan;
         end
     end
 end
+boundaries = cellfun(@uint16,boundaries,'UniformOutput', 0);
 end
 
-
 %% Shortest path
-
 function ll = shortest_path(M)
 % finds the shortest path of a nX2 matrix if the contour is
 % branching (for example, because two cells are crossing), it will
@@ -212,7 +255,6 @@ for ii = 1:length(D)
     A(ii,1) = sum(D(1:find(D(:,ii)==0),ii));
     A(ii,2) = sum(D(find(D(:,ii)==0):size(D,2),ii));
 end
-% ll(1) = find(sum(squareform(pdist(M)))==max(sum(squareform(pdist(M)))),1);
 [ll(1),~] = find(A==max(A(:)),1);
 
 for jj = 2:length(ll)
@@ -231,149 +273,148 @@ for jj = 2:length(ll)
 end
 end
 
-function arc_length = find_arc_length(arc_length, boundary, bw, extension)
+%% Sinusoidal fit
+function [amplitude, frequency, linear_length,arc_length] = sinusoidal(xy)
 
-p = arc_length(end-1:end,end-1:end);
-[row, column] = find_closest_edge(p, boundary, bw);
-arc_length = [arc_length;row',column'];
+x = xy(:,1);
+y = xy(:,2);
 
-p = flipud(arc_length(1:2,1:2));
-[row, column] = find_closest_edge(p, boundary, bw);
-arc_length = [row',column';arc_length];
+linear_length = sqrt((x(1)-x(end))^2 + (y(1)-y(end))^2);
+arc_length = sum(sqrt((diff(x)).^2 + (diff(y)).^2));
 
-    function [row,column] = find_closest_edge(p, boundary, bw)
-        
-        b = diff(p(:,2))/diff(p(:,1)); % slope
-        a = p(1,2)-b*p(1,1); %intersect
-        
-        if isinf(b) % if the line is invariant in x (vertical line)
-            if p(3)-p(4)<0
-                y = min([p(4)+1,size(bw,2)]):min([p(4)+extension,size(bw,2)]);
-                x = repmat(p(2),1,length(y));
-                x = round(x);
-                y = round(y);
-                sub = sub2ind(size(bw),x,y);
-                
-                if bw(sub(1))
-                    [row,column] = ind2sub(size(bw),sub(1:find(bw(sub)==0,1)-1));
-                else
-                    row = [];
-                    column = [];
-                end
-                
-                if ~isempty(row) &&...
-                        ~any(ismember(sub2ind(size(bw), boundary(:,1), boundary(:,2)), sub(1:find(bw(sub)==0,1)-1)))
-                    [r,c] = ind2sub(size(bw), sub(find(bw(sub)==0,1,'last'):find(bw(sub)==0,1,'last')+1));
-                    row = [row, diff(r)/2+r(1)];
-                    column = [column, diff(c)/2+c(1)];
-                end
-            elseif p(3)-p(4)>0
-                y = max(p(4)-extension,1):max(p(4)-1,1);
-                x = repmat(p(2),1,length(y));
-                x = round(x);
-                y = round(y);
-                sub = sub2ind(size(bw),x,y);
-                
-                if bw(sub(end))
-                    [row,column] = ind2sub(size(bw),sub(find(bw(sub)==0,1,'last')+1:find(bw(sub),1,'last')));
-                else
-                    row = [];
-                    column = [];
-                end
-            end
-        else
-            if p(1)-p(2)<0
-                x = p(2)+1:p(2)+extension;
-                y = a + x*b;
-                x = round(x);
-                y = round(y);
-                
-                %% cuts x or y to avoid out of frame points
-                if min(y)<1
-                    x = x(y>=1);
-                    y = y(y>=1);
-                end
-                if min(x)<1
-                    y = y(x>=1);
-                    x = x(x>=1);
-                end
-                if max(y)>size(bw,2)
-                    x = x(y<=size(bw,2));
-                    y = y(y<=size(bw,2));
-                end
-                if max(x)>size(bw,1)
-                    y = y(x<=size(bw,1));
-                    x = x(x<=size(bw,1));
-                end
-                
-                %%
-                sub = sub2ind(size(bw), x, y);
-                if bw(sub(1))
-                    [row,column] = ind2sub(size(bw),sub(find(bw(sub),1,'first'):find(bw(sub)==0,1)-1));
-                else
-                    row = [];
-                    column = [];
-                end
-                
-                if ~isempty(row) &&...
-                        ~any(ismember(sub2ind(size(bw), boundary(:,1), boundary(:,2)), sub(1:find(bw(sub)==0,1)-1)))
-                    [r,c] = ind2sub(size(bw), sub(find(bw(sub)==0,1)-1:find(bw(sub)==0,1)));
-                    row = [row, diff(r)/2+r(1)];
-                    column = [column, diff(c)/2+c(1)];
-                end
-                if isempty(row) &&...
-                        ~any(ismember(sub2ind(size(bw), boundary(:,1), boundary(:,2)), sub2ind(size(bw),p(2),p(4))))
-                    [r,c] = ind2sub(size(bw), sub(find(bw(sub)==0,1)));
-                    row = (p(2)-r)/2+r;
-                    column = (p(4)-c)/2+c;
-                end
-                
-            elseif p(1)-p(2)>0
-                x = p(2)-extension:p(2)-1;
-                y = a + x*b;
-                x = round(x);
-                y = round(y);
-                
-                %% cuts x or y to avoid out of frame points
-                if min(y)<1
-                    x = x(y>=1);
-                    y = y(y>=1);
-                end
-                if min(x)<1
-                    y = y(x>=1);
-                    x = x(x>=1);
-                end
-                if max(y)>size(bw,2)
-                    x = x(y<=size(bw,2));
-                    y = y(y<=size(bw,2));
-                end
-                if max(x)>size(bw,1)
-                    y = y(x<=size(bw,1));
-                    x = x(x<=size(bw,1));
-                end
-                
-                %%
-                sub = sub2ind(size(bw),x,y);
-                if bw(sub(end))
-                    [row,column] = ind2sub(size(bw),sub(find(bw(sub)==0,1,'last')+1:find(bw(sub),1,'last')));
-                else
-                    row = [];
-                    column = [];
-                end
-                
-                if ~isempty(row) &&...
-                        ~any(ismember(sub2ind(size(bw), boundary(:,1), boundary(:,2)), sub(find(bw(sub)==0,1,'last')+1:find(bw(sub),1,'last'))))
-                    [r,c] = ind2sub(size(bw), sub(find(bw(sub)==0,1,'last'):find(bw(sub)==0,1,'last')+1));
-                    row = [diff(r)/2+r(1),row];
-                    column = [diff(c)/2+c(1), column];
-                end
-                if isempty(row) &&...
-                        ~any(ismember(sub2ind(size(bw), boundary(:,1), boundary(:,2)), sub2ind(size(bw),p(2),p(4))))
-                    [r,c] = ind2sub(size(bw), sub(find(bw(sub)==0,1,'last')));
-                    row = (p(2)-r)/2+r;
-                    column = (p(4)-c)/2+c;
-                end
-            end
-        end
-    end
+p = polyfit(x,y,1);
+R = [cos(atan(p(1))) -sin(atan(p(1))); sin(atan(p(1))) cos(atan(p(1)))]; %transformation matrix
+t = [x,y]*R;
+y_hat = t(:,2);
+x_hat = t(:,1);
+
+if mean(diff(x_hat))<0
+    x_hat = flip(x_hat);
 end
+
+x_hat = x_hat-min(x_hat);
+y_hat = y_hat-mean(y_hat);
+Fs = 1/mean(diff(x_hat));
+y_hat = interp1(x_hat, y_hat, min(x_hat):1/Fs:max(x_hat));
+
+padding = 1000;
+xdft = fft(y_hat, padding);
+xdft = xdft(1:length(xdft)/2+1);
+xdft = 1/length(y_hat).*xdft;
+xdft(2:end-1) = 2*xdft(2:end-1);
+freq = Fs/2*linspace(0,1,padding/2+1);
+amplitude = max(abs(xdft));
+frequency = freq(abs(xdft)==amplitude);
+
+end
+
+%% Arc length
+function arc_length = find_arc_length(arc_length, boundary, extended)
+
+p = arc_length(end-1:end,:);
+if diff(p(:,1))<0
+    b = diff(p(:,2))/diff(p(:,1));
+    a = p(1,2)-b*p(1,1); %intersect
+    x = flip(p(2)-extended:0.1:p(2));
+    y = a + x*b;
+elseif diff(p(:,1))>0
+    b = diff(p(:,2))/diff(p(:,1));
+    a = p(1,2)-b*p(1,1); %intersect
+    x = p(2):0.1:p(2)+extended;
+    y = a + x*b;
+elseif diff(p(:,1))==0
+    b = diff(p(:,1))/diff(p(:,2));
+    a = p(1,1); %intersect
+    if diff(p(:,2))>0
+        y = p(4):0.1:p(4)+extended;
+    else
+        y = flip(p(4)-extended:0.1:p(4));
+    end
+    x = a + y*b;
+end
+arc_length = [arc_length;x(:),y(:)];
+
+% arc_length(inpolygon(x',y',boundary(:,1),boundary(:,2)),:)
+% row = row-extension;
+% column = column-extension;
+% arc_length = [arc_length;row',column'];
+
+p = arc_length(1:2,:);
+b = diff(p(:,2))/diff(p(:,1));
+a = p(1,2)-b*p(1,1); %intersect
+if diff(p(:,1))>0
+    x = p(1)-extended:0.1:p(1);
+    y = a + x*b;
+elseif diff(p(:,1))<0
+    x = flip(p(1):0.1:p(1)+extended);
+    y = a + x*b;
+elseif diff(p(:,1))==0
+    b = diff(p(:,1))/diff(p(:,2));
+    a = p(1,1); %intersect
+    if diff(p(:,2))>0
+        y = p(3)-extended:0.1:p(3);
+    else
+        y = flip(p(3):0.1:p(3)+extended);
+    end
+    x = a + y*b;
+end
+arc_length = [x',y';arc_length];
+
+arc_length = arc_length(inpolygon(arc_length(:,1),arc_length(:,2),boundary(:,1),boundary(:,2)),:);
+
+% p = flipud(arc_length(1:2,1:2));
+% [row, column] = find_closest_edge(p, boundary, bw);
+% arc_length = [row',column';arc_length];
+
+end
+
+%% Curvature
+function [r,a,b, R2, df, RMSE] = radius_of_curvature(x,y)
+%  given a load of points, with x,y coordinates, we can estimate the radius
+%  of curvature by fitting a circle to them using least squares.
+%    translate the points to the centre of mass coordinates
+try
+    mx = mean(x);
+    my = mean(y);
+    X = x - mx; Y = y - my;
+    
+    dx2 = mean(X.^2);
+    dy2 = mean(Y.^2);
+    
+    %    Set up linear equation for derivative and solve
+    RHS = (X.^2-dx2+Y.^2-dy2)/2;
+    M = [X,Y];
+    
+    t = M\RHS;
+    
+    %    t is the centre of the circle [a0;b0]
+    a0 = t(1); b0 = t(2);
+    
+    %   from which we can get the radius
+    r = sqrt(dx2+dy2+a0^2+b0^2);
+    
+    %   return to given coordinate system
+    a = a0 + mx;
+    b = b0 + my;
+    
+    %% goodness of fit
+    [curvefit,gof,~]=fit(x-a,(y-b).^2,@(beta,x) ((beta^2-x.^2)), 'Startpoint',r);
+    
+    if gof.adjrsquare<0||gof.adjrsquare>1, error('bad fit'),end
+    
+    r = curvefit.beta;
+    R2 = gof.adjrsquare;
+    df = gof.dfe;
+    RMSE = gof.rmse;
+    
+catch
+    r = nan;
+    a = nan;
+    b = nan;
+    df = nan;
+    R2 = nan;
+    RMSE = nan;
+end
+end
+
+

@@ -1,6 +1,8 @@
-function [run_lengths, run_speeds, run_angle_deviation, ...
+function [run_lengths, run_speeds, run_complete,...
+    run_angle_deviation, mean_run_orientation, run_path_frequency,...
     tumble_times, tumble_angles, tumble_angular_velocities,...
-    speeds, angular_velocities, runs, tumbles, time] =...
+    speeds, angular_velocities, runs, tumbles, time, displacements,...
+    angle_threshold, speed_threshold] =...
     runs_and_tumbles(track, FrameRate, angle_threshold, speed_threshold,...
     minimum_run_length, a, b, method, win_length)
 
@@ -16,9 +18,7 @@ function [run_lengths, run_speeds, run_angle_deviation, ...
 %       FrameRate is the sampling rate of the video in frames per second.
 %
 %       angle_threshold (optional) is the threshold (in radians) for
-%       aGamar1$!
-
-%           change in direction to be considered a tumble. If empty, a
+%           a change in direction to be considered a tumble. If empty, a
 %           theoretical angle threshold is calculated using
 %           brownian_thresholds.
 %
@@ -33,7 +33,7 @@ function [run_lengths, run_speeds, run_angle_deviation, ...
 %       a and b are the semiaxis of the ellipsoid in meters.
 %
 %       method is the statistic used for the smoothing algorithm. It can be
-%           mean, median and max. Default is method.
+%           mean, median and max. Default is mean.
 %
 %       win_length is the window length (in frames) of the smoothing
 %           algorithm.
@@ -88,7 +88,7 @@ function [run_lengths, run_speeds, run_angle_deviation, ...
 %     speeds, angular_velocities, runs, tumbles, time] =...
 %     runs_and_tumbles(track, FrameRate, [], [],...
 %     minimum_run_length, a, b, 'mean', win_length);
-% 
+%
 %  Copyright (C) 2016,  Oscar Guadayol
 %  oscar_at_guadayol.cat
 %
@@ -96,34 +96,38 @@ function [run_lengths, run_speeds, run_angle_deviation, ...
 %  This program is free software; you can redistribute it and/or modify it
 %  under the terms of the GNU General Public License, version 3.0, as
 %  published by the Free Software Foundation.
-% 
+%
 %  This program is distributed in the hope that it will be useful, but
 %  WITHOUT ANY WARRANTY; without even the implied warranty of
 %  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
 %  General Public License for more details.
-% 
+%
 %  You should have received a copy of the GNU General Public License along
 %  with this program.  If not, see <http://www.gnu.org/licenses/>.
-% 
+%
 %  This files is part of trackbac, a collection of matlab scripts to
 %  geometrically characterize and track swimming bacteria imaged by a
 %  phase-contrast microscope.
 
-[angle, displacement] = brownian_thresholds(a/2,b/2, win_length/FrameRate, 0.01);
-if isempty(angle_threshold) || isnan(angle_threshold)
-    angle_threshold = angle/(win_length/FrameRate); % apparent angular velocity threshold in radians per second
-end % if isempty(angle_threshold)
-if isempty(speed_threshold) || isnan(speed_threshold)
-    speed_threshold = displacement*1e6/win_length*FrameRate; % apparent speed threshold in µmeters per second during time step
-end % if isempty(speed_threshold)
+% [angle, displacement] = brownian_thresholds(Dr,Dt, win_length/FrameRate, 0.01);
+% if isempty(angle_threshold) || isnan(angle_threshold)
+%     angle_threshold = angle/(win_length/FrameRate); % apparent angular velocity threshold in radians per second
+% end % if isempty(angle_threshold)
+% if isempty(speed_threshold) || isnan(speed_threshold)
+%     speed_threshold = displacement*1e6/(win_length/FrameRate); % apparent speed threshold in µmeters per second during time step
+% end % if isempty(speed_threshold)
 
 run_lengths = [];
 run_speeds = [];
+run_complete = [];
 run_angle_deviation = [];
 tumble_times = [];
 tumble_angles = [];
 tumble_angular_velocities = [];
+mean_run_orientation = [];
 minimum_run_length = minimum_run_length*FrameRate; % minimum run length in frames
+displacements = [];
+run_path_frequency = [];
 
 %%
 track = track(~isnan(track(:,5)),:);
@@ -140,9 +144,9 @@ end
 
 %% Smoothing
 if win_length > 1
-    ftrack = smooth_track(track(:,5:6,:), win_length, method);
+    ftrack = smooth_track(track(:,5:6), win_length, method);
 else
-    ftrack = track(:,5:6,:);
+    ftrack = track(:,5:6);
 end % if win_length > 1
 x = gradient(ftrack(:,1),time);
 y = gradient(ftrack(:,2),time);
@@ -158,27 +162,48 @@ speeds = sqrt(x.^2+y.^2);
 % change in position of the centroid is used.
 
 if a/b>3
-        % this changes the -90 to 90 degrees output from the    % regionprops órientation'into a 0 to 180 degrees
-    track(track(:,12)>0,12) = 180-track(track(:,12)>0,12);
-    track(track(:,12)<0,12) = -track(track(:,12)<0,12);
-    
-    % this expands to 0 to 360 taking into account the direction of the
-    % movement in the y axis. When the cell is running paralell to the x
-    % axis, y oscillates between positive and negative, which produces
-    % spurious reversals. To avoid this I use the y<-1 speed, rather than
-    % the full precision value.
-    track(y<-1,12)  = track(y<-1,12)+180;
+    % regionprops uses the image with y axis reversed to calculate the
+    % particle orientations. On top, the values range from -90 to 90.
+    track(:,12) = mod((360-track(:,12))/180*pi,pi);
     
     % decomposes the angle
-    y = sin(track(:,12)/180*pi);
-    x = cos(track(:,12)/180*pi);
+    y = sin(track(:,12));
+    x = cos(track(:,12));
     
-    % smoothes the orientations by making a running vectorial average of
+    reverse = all(sign([x y])~=sign([gradient(ftrack(:,1)),gradient(ftrack(:,2))]),2);
+    x(reverse) = -x(reverse);
+    y(reverse) = -y(reverse);
+    
+    reverse = find(any(sign([x y])~=sign([gradient(ftrack(:,1)),gradient(ftrack(:,2))]),2));
+    for ii = 1:length(reverse)
+        if reverse(ii) ==1
+            jj = find(gradient(reverse)>1,1)+1;
+        else
+            jj = reverse(ii)-1;
+        end
+        
+        if min(2*pi-abs(atan2(y(jj),x(jj))-atan2(y(reverse(ii)),x(reverse(ii)))),abs(atan2(y(jj),x(jj))-atan2(y(reverse(ii)),x(reverse(ii)))))>...
+                min(2*pi-abs(atan2(y(jj),x(jj))-atan2(-y(reverse(ii)),-x(reverse(ii)))),abs(atan2(y(jj),x(jj))-atan2(-y(reverse(ii)),-x(reverse(ii)))))
+            x(reverse(ii)) = -x(reverse(ii));
+            y(reverse(ii)) = -y(reverse(ii));
+        end
+        
+    end
+    
+    non_smoothed_orientations = atan2(y,x);
+    non_smoothed_orientations(non_smoothed_orientations<0) = 2*pi+non_smoothed_orientations(non_smoothed_orientations<0);
+    non_smoothed_orientations = unwrap(non_smoothed_orientations);
+    
+    % smooths the orientations by making a running vectorial average of
     % window win_length
     if win_length > 1
         y = smooth_track(y, win_length, method);
         x = smooth_track(x, win_length, method);
     end % if win_length > 1
+else
+    non_smoothed_orientations = atan2(y,x);
+    non_smoothed_orientations(non_smoothed_orientations<0) = 2*pi+non_smoothed_orientations(non_smoothed_orientations<0);
+    non_smoothed_orientations = unwrap(non_smoothed_orientations);
     
 end % if a/b>3
 
@@ -194,9 +219,6 @@ rr = angular_velocities<angle_threshold & speeds>speed_threshold;
 starts = find((diff(rr))==1)+1;
 ends = find((diff(rr))==-1);
 
-if isempty(starts)||isempty(ends)
-    return
-end
 if rr(1)
     starts = [1;starts];
 end
@@ -204,14 +226,18 @@ if rr(end)
     ends = [ends;length(rr)];
 end
 runs = [starts ends];
-runs(diff(runs,[],2)<minimum_run_length,:) = [];
+runs(diff(runs,[],2)<minimum_run_length &... % remove runs shorter than minimum run length
+    runs(:,1)>1 &...        % and that are not at the beggining
+    runs(:,2)<length(rr),:) = [];  % or the end of the track
 tumbles = [runs(1:end-1,2)+1 runs(2:end,1)-1];
 
-%% removes runs and tumble at the beggining and end of the track
-runs(any(runs==1,2),:) = [];
-runs(any(runs==length(rr),2),:) = [];
+%% removes tumbles at the beggining and end of the track
 tumbles(any(tumbles==1,2),:) = [];
 tumbles(any(tumbles==length(rr),2),:) = [];
+
+%% removes tumbles that are not flanked by full runs
+% tumbles(tumbles(:,1) < min(runs(:,2)),:) = [];
+% tumbles(tumbles(:,1) > max(runs(:,2)),:) = [];
 
 %% statistics
 tumble_times = diff(tumbles,[],2)/FrameRate; % run lengths in seconds
@@ -219,32 +245,34 @@ tumble_angles = nan(size(tumbles,1),1); % change in angle after a tumble
 tumble_angular_velocities = nan(size(tumbles,1),1); % angular velocities during tumbles
 
 for ii = 1:length(tumble_times)
-    if tumbles(ii,1)>ceil(win_length/2) &&...
+    if tumbles(ii,1)>ceil(win_length/2)+1 &&...
             tumbles(ii,2)+1+floor(win_length/2)<length(time)
         angle0 = mean(orientations(tumbles(ii,1)-1-floor(win_length/2):tumbles(ii,1)-1));
         anglef = mean(orientations(tumbles(ii,2)+1:tumbles(ii,2)+1+floor(win_length/2)));
         tumble_angles(ii) = anglef-angle0;
     end
-    
-    tumble_angular_velocities(ii) = ...
-        atan2(...
-        mean(sin(angular_velocities(tumbles(ii,1):tumbles(ii,2))/FrameRate)),...
-        mean(cos(angular_velocities(tumbles(ii,1):tumbles(ii,2))/FrameRate))...
-        )*FrameRate;
+    tumble_angular_velocities(ii) = mean(angular_velocities(tumbles(ii,1):tumbles(ii,2)));
 end
 
 %% RUN ANGLE DEVIATIONS
 if ~isempty(runs)
-    run_lengths = diff(runs,[],2)/FrameRate; % run lengths in seconds
+    run_lengths = (diff(runs,[],2)+1)/FrameRate; % run lengths in seconds
+    run_complete = ~(any(runs==1,2) | any(runs==length(rr),2));
     run_speeds = nan(size(runs,1),4); % run mean speeds in µm/seconds
-    run_angle_deviation = [];
-    orientations = unwrap(orientations);    
+    
+    run_angle_deviation = double.empty(0,50);
+    mean_run_orientation = nan(size(runs,1),1);
+    orientations = unwrap(orientations);
+    displacements = nan(size(track,1), size(runs,1));
     for ii = 1:size(runs,1)
-        r_speeds = sqrt(sum(diff(ftrack(runs(ii,1):runs(ii,2),:)).^2,2))*FrameRate;
+        displacements(1:runs(ii,2)-runs(ii,1)+1,ii) = ...
+            ((ftrack(runs(ii,1),1)-ftrack(runs(ii,1):runs(ii,2),1)).^2+(ftrack(runs(ii,1),2)-ftrack(runs(ii,1):runs(ii,2),2)).^2);
+        r_speeds = sqrt(sum(diff(ftrack(runs(ii,1):runs(ii,2),:),1,1).^2,2))*FrameRate;
         run_speeds(ii,1) = mean(r_speeds);
         run_speeds(ii,2) = std(r_speeds);
         min_speeds = min(r_speeds);
         max_speeds = max(r_speeds);
+        mean_run_orientation(ii) = mean(orientations(runs(ii,1):runs(ii,2)));
         if isempty(min_speeds)
             run_speeds(ii,3) = nan;
             run_speeds(ii,4) = nan;
@@ -252,60 +280,16 @@ if ~isempty(runs)
             run_speeds(ii,3) = min_speeds;
             run_speeds(ii,4) = max_speeds;
         end
-        time_step = win_length;
-        track_deviation = orientations(runs(ii,1)+time_step:runs(ii,2)) -...
-            orientations(runs(ii,1):runs(ii,2)-time_step);
-        run_angle_deviation = [run_angle_deviation; track_deviation];
-    end
-end
-
-%% Brownian thresholds
-    function [angle, displacement] = brownian_thresholds(a,b, time_step, p_value)
         
-        % Given an ellipsoid of revolution of semiaxis a and b, calculates
-        % the maximum angle of rotational diffusivity around minor semiaxis
-        % b and the maximum linear displacement (in m) along the major
-        % semiaxis a expectable from brownian motion on a given time step.
-        %
-        % input variables:
-        %       a and b are the semiaxis of the ellipsoid in meters
-        %       time_step is the time between successive observations
-        %       p_value (optional) is the probability of occurrance of a
-        %           rotational angle wider than the threshold_angle.
-        %           Default= 1-99.7300204/100 (the probability of 3
-        %           standard deviations)
-        %
-        % output variables:
-        %
-        %       threshold angle around the minor aces (in radians)
-        %       threshold dislacement along the major semiaxis (in meters)
-        %
-        % Oscar guadayol March 2015
+        run_angle_deviation = [run_angle_deviation;...
+            orientations(runs(ii,1):runs(ii,2))-lagmatrix(orientations(runs(ii,1):runs(ii,2)),1:50)];
         
-        if nargin == 3 || isempty(p_value)
-            p_value = 1-99.7300204/100;
+        run_path_frequency(ii)= nan;
+        if runs(ii,2)-runs(ii,1)>8
+            [ppx,f] = pwelch(detrend(non_smoothed_orientations(runs(ii,1):runs(ii,2))),diff(runs(ii,1:2))+1,[],[],FrameRate);
+            [~, i] = max(ppx(2:end));
+            run_path_frequency(ii)= f(i+1);
         end
-        
-        [~,~, Dt, Dr]  = theoretical_friction_coefficients(a,b,b,33);
-        
-        
-        % %% With flagellar stabilization, in Mitchell 2002 fashion
-        % [ft_flagellum,fr_flagellum, ~, ~]  =...
-        % theoretical_friction_coefficients(7.8*1e-6/2,0.2*1e-6/2,0.2*1e-6/2, 33);
-        %
-        % T = 33; % temperature
-        % k_b = 1.38e-23; % Boltzmann constant (J/K)
-        % K = T+273.15; % temperature in Kelvins
-        %
-        % Dt =  k_b*K./(ft + ft_flagellum);
-        % Dr =  k_b*K./(fr + fr_flagellum);
-        
-        %%
-        rms_angle = (2*Dr(2)*time_step).^(1/2); % standard deviation of the normal distribution of angles after a time=time_step
-        angle = abs(norminv(p_value/2,0,rms_angle));
-        
-        rms_displacement = (2*Dt(1)*time_step).^(1/2); % standard deviation of the normal distribution of displacements after a time=time_step
-        displacement = norminv(1-p_value/2,0,rms_displacement);
         
     end
 end

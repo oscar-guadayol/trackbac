@@ -1,10 +1,13 @@
-function [Run_lengths, Run_speeds, Run_angle_deviations,...
+function [Run_lengths, Run_speeds, Run_complete,...
+    Run_angle_deviations, Run_mean_orientations, Run_path_frequencies, ...
     Tumble_times, Tumble_angles, Tumble_angular_velocities,...
     Cell_area, Cell_length, Cell_width, Cell_eccentricity,...
     Cell_equi_diam, Cell_perimeter, Cell_solidity,...
+    Cell_radius,Cell_radius_R2, Cell_radius_df,Cell_radius_RMSE,...
+    Cell_amplitude, Cell_frequency,...
     StartTimes, fig] = ...
-    Runs(tracks, angle_threshold, speed_threshold, win_length,...
-    minimum_run_length, method, FrameRate, plotting, figure_export)
+    Runs(tracks, cell_width, angle_threshold, speed_threshold, win_length,...
+    minimum_run_length, method, FrameRate, dimensions_offset, plotting, figure_export)
 
 % This function detects and analyses the runs and tumbles in all the input
 % tracks and compiles all the pertinent statistics.
@@ -18,13 +21,13 @@ function [Run_lengths, Run_speeds, Run_angle_deviations,...
 %           runs_and_tumbles will estimate a theoretical threshold based on
 %           the ellipsodial model from Brownian motion.
 %
-%       speed_threshold (optional) is the threshold (in µm s^-1 ) for a
+%       speed_threshold (optional) is the threshold (in Âµm s^-1 ) for a
 %       	section to be considered a run. If empty, runs_and_tumbles will
 %           estimate a theoretical threshold based on the ellipsodial
 %           model from Brownian motion.
 %
 %       win_length is a scalar with the length (in frames) of the moving
-%           average window applied to the x y positions of the track. 
+%           average window applied to the x y positions of the track.
 %
 %       minimum_run_length is the minimum length (in seconds) for a segment
 %           of a track without significant  change in direction to be
@@ -41,7 +44,7 @@ function [Run_lengths, Run_speeds, Run_angle_deviations,...
 %           tumbles. Default is false.
 %
 %       figure_export is a logical value. If true a dialog will open to
-%           save the figure as eps. 
+%           save the figure as eps.
 %
 %
 % Output variables:
@@ -103,22 +106,24 @@ function [Run_lengths, Run_speeds, Run_angle_deviations,...
 %       fig is the handle for the output figure.
 %
 %
-% Requires: image processing toolbox
+% Requires: image processing toolbox, SW_viscosity from Thermophysical
+%       properties of seawater toolbox (http://web.mit.edu/seawater/)
 %
 % Calls: runs_and_tumbles, runs_and_tumble_figure
 %
 % Called by: Runs_gui
 %
 % Ex.:
-%   [Run_lengths, Run_speeds, Run_angle_deviations,...
+%   [Run_lengths, Run_speeds, Run_complete,...
+%     Run_angle_deviations, Run_mean_orientations, Run_path_frequencies, ...
 %     Tumble_times, Tumble_angles, Tumble_angular_velocities,...
 %     Cell_area, Cell_length, Cell_width, Cell_eccentricity,...
 %     Cell_equi_diam, Cell_perimeter, Cell_solidity,...
-%     StartTimes, fig] = ...
-%     Runs(tracks, [], [], win_length,...
-%     minimum_run_length, 'mean', FrameRate, true, false)
-%
+%     StartTimes, Displacements, fig] = ...
+%     Runs(tracks, cell_width, angle_threshold, speed_threshold, win_length,...
+%     minimum_run_length, method, FrameRate, dimensions_offset, true, false)
 % 
+%
 %  Copyright (C) 2016,  Oscar Guadayol
 %  oscar_at_guadayol.cat
 %
@@ -126,74 +131,141 @@ function [Run_lengths, Run_speeds, Run_angle_deviations,...
 %  This program is free software; you can redistribute it and/or modify it
 %  under the terms of the GNU General Public License, version 3.0, as
 %  published by the Free Software Foundation.
-% 
+%
 %  This program is distributed in the hope that it will be useful, but
 %  WITHOUT ANY WARRANTY; without even the implied warranty of
 %  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
 %  General Public License for more details.
-% 
+%
 %  You should have received a copy of the GNU General Public License along
 %  with this program.  If not, see <http://www.gnu.org/licenses/>.
-% 
+%
 %  This files is part of trackbac, a collection of matlab scripts to
 %  geometrically characterize and track swimming bacteria imaged by a
 %  phase-contrast microscope.
 
-Run_lengths = [];
-Run_speeds = [];
-Run_angle_deviations = [];
-Tumble_times = [];
-Tumble_angles = [];
-Tumble_angular_velocities = [];
-Cell_area =  [];
-Cell_length =  [];
-Cell_width = [];
-Cell_eccentricity =  [];
-Cell_equi_diam = [];
-Cell_perimeter = [];
-Cell_solidity =  [];
-StartTimes =  [];
+if isempty(cell_width)
+    cell_width = 0.75*1e-6;
+end
+    
+Run_lengths = cell(size(tracks,3),1);
+Run_path_frequencies = cell(size(tracks,3),1);
+Run_speeds = cell(size(tracks,3),1);
+Run_complete = cell(size(tracks,3),1);
+Run_angle_deviations = cell(size(tracks,3),1);
+Run_mean_orientations = cell(size(tracks,3),1);
+Tumble_times = cell(size(tracks,3),1);
+Tumble_angles = cell(size(tracks,3),1);
+Tumble_angular_velocities = cell(size(tracks,3),1);
+Cell_area = cell(size(tracks,3),1);
+Cell_length = cell(size(tracks,3),1);
+Cell_width = cell(size(tracks,3),1);
+Cell_eccentricity = cell(size(tracks,3),1);
+Cell_equi_diam = cell(size(tracks,3),1);
+Cell_perimeter = cell(size(tracks,3),1);
+Cell_solidity = cell(size(tracks,3),1);
+Cell_radius = cell(size(tracks,3),1);
+Cell_radius_R2 = cell(size(tracks,3),1);
+Cell_radius_df = cell(size(tracks,3),1);
+Cell_radius_RMSE = cell(size(tracks,3),1);
+Cell_amplitude = cell(size(tracks,3),1);
+Cell_frequency = cell(size(tracks,3),1);
+
+StartTimes = cell(size(tracks,3),1);
 fig = [];
 
-for tt = 1:size(tracks,3)
-    dimensions_offset = 0.7670; % offset bewteen the dimensions obtained with phase contrast and those from electon microscope
-    a = (nanmedian(tracks(:,15,tt))-dimensions_offset)*1e-6;
-    % b = (nanmedian(tracks(:,17,tt))-dimensions_offset)*1e-6;
-    b = 0.71*1e-6;
+%% thresholds
+A = (squeeze(nanmedian(tracks(:,15,:)))-dimensions_offset)*1e-6;
+B = (squeeze(nanmedian(tracks(:,17,:)))-dimensions_offset)*1e-6;
+[~,~, Dt, Dr]  = theoretical_friction_coefficients(A/2,repmat(cell_width/2,size(A,1),1),repmat(cell_width/2,size(A,1),1),30); 
+p_value = 1-99.7300204/100;
+time_step = win_length/FrameRate;
+rms_angle = (2*Dr(:,2)*time_step).^(1/2); % standard deviation of the normal distribution of angles after a time=time_step
+angle = abs(norminv(p_value/2,0,rms_angle));
+rms_displacement = (2*Dt(:,1)*time_step).^(1/2); % standard deviation of the normal distribution of displacements after a time=time_step
+displacement = norminv(1-p_value/2,0,rms_displacement);
+if isempty(angle_threshold) || isnan(angle_threshold)
+    angle_threshold = angle/(win_length/FrameRate); % apparent angular velocity threshold in radians per second
+end % if isempty(angle_threshold)
+if isempty(speed_threshold) || isnan(speed_threshold)
+    speed_threshold = displacement*1e6/(win_length/FrameRate); % apparent speed threshold in µmeters per second during time step
+end % if isempty(speed_threshold)
 
-   [run_lengths, run_speeds, run_angle_deviation, ...
-       tumble_times, tumble_angles, tumble_angular_velocities] = ...
-        runs_and_tumbles(tracks(:,:,tt), FrameRate, angle_threshold,...
-        speed_threshold, minimum_run_length, a, b,...
+parfor tt = 1:size(tracks,3)
+    track = tracks(:,:,tt);
+    [Run_lengths{tt}, Run_speeds{tt}, Run_complete{tt},...
+        Run_angle_deviations{tt}, Run_mean_orientations{tt}, Run_path_frequencies{tt},...
+        Tumble_times{tt}, Tumble_angles{tt}, Tumble_angular_velocities{tt}, ...
+        ~, ~, ~, ~, ~, ~,~,~] =...
+        runs_and_tumbles(track, FrameRate, angle_threshold(tt),...
+        speed_threshold(tt), minimum_run_length, A(tt), B(tt),...
         method, win_length);
-    
-    if any([~isempty(run_lengths), ~isempty(tumble_times)])
-        run_lengths = [run_lengths; nan(length(tumble_times)-length(run_lengths),1)];
-        run_speeds = [run_speeds; nan(length(tumble_times)-size(run_speeds,1),4)];
-        run_angle_deviation = [run_angle_deviation; nan(length(tumble_times)-size(run_angle_deviation,1),1)];
-        tumble_times = [tumble_times; nan(length(run_lengths)-length(tumble_times),1)];
-        tumble_angles= [tumble_angles; nan(length(run_lengths)-length(tumble_angles),1)];
-        tumble_angular_velocities= [tumble_angular_velocities; nan(length(run_lengths)-length(tumble_angular_velocities),1)];
-        Run_lengths = [Run_lengths; [ones(length(run_lengths), 1)* tt, run_lengths]];
-        Run_speeds = [Run_speeds; [ones(length(run_lengths), 1)* tt, run_speeds]];
-        Run_angle_deviations = [Run_angle_deviations; [ones(length(run_angle_deviation), 1)* tt, run_angle_deviation]];
-        Tumble_times = [Tumble_times; tumble_times];
-        Tumble_angles = [Tumble_angles; tumble_angles];
-        Tumble_angular_velocities = [Tumble_angular_velocities; tumble_angular_velocities];        
-        Cell_area = [Cell_area; repmat([nanmean(tracks(:,7,tt)), nanstd(tracks(:,7,tt))],length(run_lengths),1)];
-        Cell_length = [Cell_length; repmat([nanmedian(tracks(:,15,tt))-dimensions_offset, nanstd(tracks(:,15,tt))],length(run_lengths),1)];
-        Cell_width = [Cell_width; repmat([nanmedian(tracks(:,17,tt))-dimensions_offset, nanstd(tracks(:,17,tt))],length(run_lengths),1)];
-        Cell_eccentricity = [Cell_eccentricity; repmat([nanmean(tracks(:,10,tt)), nanstd(tracks(:,10,tt))],length(run_lengths),1)];
-        Cell_equi_diam = [Cell_equi_diam; repmat([nanmean(tracks(:,11,tt)), nanstd(tracks(:,11,tt))],length(run_lengths),1)];
-        Cell_perimeter = [Cell_perimeter; repmat([nanmean(tracks(:,13,tt)), nanstd(tracks(:,13,tt))],length(run_lengths),1)];
-        Cell_solidity = [Cell_solidity; repmat([nanmean(tracks(:,14,tt)), nanstd(tracks(:,14,tt))],length(run_lengths),1)];
-        if size(tracks,2)==19
-            StartTimes = [StartTimes; repmat(tracks(1,end,tt),length(run_lengths),1)];
+    if any([~isempty(Run_lengths{tt}), ~isempty(Tumble_times{tt})])
+        
+        %% pads variables to equal lengths        
+        Run_lengths{tt} = [Run_lengths{tt}; nan(length(Tumble_times{tt})-length(Run_lengths{tt}),1)];
+        Run_path_frequencies{tt} = [Run_path_frequencies{tt}(:); nan(length(Tumble_times{tt})-length(Run_lengths{tt}),1)];
+        Run_speeds{tt} = [Run_speeds{tt}; nan(length(Tumble_times{tt})-size(Run_speeds{tt},1),4)];
+        Run_angle_deviations{tt} = [Run_angle_deviations{tt}; nan(length(Tumble_times{tt})-size(Run_angle_deviations{tt},1),1)];
+        Run_angle_deviations{tt} = [ones(size(Run_angle_deviations{tt},1), 1)* tt, Run_angle_deviations{tt}];
+        if isempty(Run_mean_orientations{tt})
+            Run_mean_orientations{tt} = nan;
         end
+        Tumble_times{tt} = [Tumble_times{tt}; nan(length(Run_lengths{tt})-length(Tumble_times{tt}),1)];
+        Tumble_angles{tt} = [Tumble_angles{tt}; nan(length(Run_lengths{tt})-length(Tumble_angles{tt}),1)];
+        Tumble_angular_velocities{tt} = [Tumble_angular_velocities{tt}; nan(length(Run_lengths{tt})-length(Tumble_angular_velocities{tt}),1)];
+       
+        %% add a column with the track number
+        Run_lengths{tt} = [ones(length(Run_lengths{tt}), 1)* tt, Run_lengths{tt}];
+        Run_complete{tt} = [ones(length(Run_complete{tt}), 1)* tt, Run_complete{tt}];
+        Run_path_frequencies{tt} = [ones(length(Run_path_frequencies{tt}), 1)* tt, Run_path_frequencies{tt}];
+        Run_speeds{tt} = [ones(size(Run_speeds{tt},1), 1)* tt, Run_speeds{tt}];
+        Run_mean_orientations{tt} = [ones(length(Run_mean_orientations{tt}), 1)* tt, Run_mean_orientations{tt}];
+        
+        %% geometry of cells for each run/tumble
+        Cell_area{tt} = repmat([nanmean(track(:,7)), nanstd(track(:,7))],size(Run_lengths{tt},1),1);
+        Cell_length{tt} = repmat([nanmedian(track(:,15))-dimensions_offset, nanstd(track(:,15))],size(Run_lengths{tt},1),1);
+        Cell_width{tt} = repmat([nanmedian(track(:,17))-dimensions_offset, nanstd(track(:,17))],size(Run_lengths{tt},1),1);
+        Cell_eccentricity{tt} = repmat([nanmean(track(:,10)), nanstd(track(:,10))],size(Run_lengths{tt},1),1);
+        Cell_equi_diam{tt} = repmat([nanmean(track(:,11)), nanstd(track(:,11))],size(Run_lengths{tt},1),1);
+        Cell_perimeter{tt} = repmat([nanmean(track(:,13)), nanstd(track(:,13))],size(Run_lengths{tt},1),1);
+        Cell_solidity{tt} = repmat([nanmean(track(:,14)), nanstd(track(:,14))],size(Run_lengths{tt},1),1);
+        Cell_radius{tt} = repmat([nanmean(track(:,18)), nanstd(track(:,18))],size(Run_lengths{tt},1),1);
+        Cell_radius_R2{tt} = repmat([nanmean(track(:,19)), nanstd(track(:,19))],size(Run_lengths{tt},1),1);
+        Cell_radius_df{tt} = repmat([nanmean(track(:,20)), nanstd(track(:,20))],size(Run_lengths{tt},1),1);
+        Cell_radius_RMSE{tt} = repmat([nanmean(track(:,21)), nanstd(track(:,21))],size(Run_lengths{tt},1),1);
+        Cell_amplitude{tt} = repmat([nanmean(track(:,22)), nanstd(track(:,22))],size(Run_lengths{tt},1),1);
+        Cell_frequency{tt} = repmat([nanmean(track(:,23)), nanstd(track(:,23))],size(Run_lengths{tt},1),1);
+
+        StartTimes{tt} = repmat(track(1,end),size(Run_lengths{tt},1),1);
     end
 end
 
+Run_angle_deviations = vertcat(Run_angle_deviations{:});
+Run_lengths = vertcat(Run_lengths{:});
+Run_complete = vertcat(Run_complete{:});
+Run_path_frequencies = vertcat(Run_path_frequencies{:});
+Run_speeds = vertcat(Run_speeds{:});
+Run_mean_orientations = vertcat(Run_mean_orientations{:});
+Tumble_times = vertcat(Tumble_times{:});
+Tumble_angles = vertcat(Tumble_angles{:});
+Tumble_angular_velocities = vertcat(Tumble_angular_velocities{:});
+Cell_area = vertcat(Cell_area{:});
+Cell_length = vertcat(Cell_length{:});
+Cell_width = vertcat(Cell_width{:});
+Cell_eccentricity = vertcat(Cell_eccentricity{:});
+Cell_equi_diam = vertcat(Cell_equi_diam{:});
+Cell_perimeter = vertcat(Cell_perimeter{:});
+Cell_solidity = vertcat(Cell_solidity{:});
+Cell_radius = vertcat(Cell_radius{:});
+Cell_radius_R2 = vertcat(Cell_radius_R2{:});
+Cell_radius_df = vertcat(Cell_radius_df{:});
+Cell_radius_RMSE = vertcat(Cell_radius_RMSE{:});
+Cell_amplitude = vertcat(Cell_amplitude{:});
+Cell_frequency = vertcat(Cell_frequency{:});
+StartTimes = vertcat(StartTimes{:});
+
 %% figure
 if ~isempty(Run_speeds) && plotting
-    fig = runs_and_tumbles_figure(Run_speeds, Run_lengths, Tumble_times, Tumble_angles, FrameRate, win_length, figure_export);
+    fig = runs_and_tumbles_figure(Run_speeds, Run_lengths, Run_complete, Tumble_times, Tumble_angles, FrameRate, win_length, figure_export);
 end

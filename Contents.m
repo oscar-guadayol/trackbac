@@ -20,11 +20,11 @@
 %   particle_detection: detects and characterizes moving particles in a 
 %       video.
 %   tracker: tracks multiple bacteria using 'Boundaries' cell array
-%       from particles_threshold.
+%       from particles_threshold
 %   track_select: select long tracks from cell
 %       array t (created by tracker.m) and reorganizes them into a matrix.
 %   merge_tracks: merges tracks from a list of mat files into a single
-%       matrix.
+%       matrix
 %   Runs: detects and analyses the runs and tumbles in all the input tracks
 %       and compiles all the pertinent statistics.
 %   Runs_gui: allows to visualize individual tracks and their decomposition
@@ -43,13 +43,10 @@
 %   moving_tracks: discriminates between actively swimming cells and cells
 %       moving purely by Brownian motion.
 %   theoretical_friction_coefficients: calculates translational and
-%       rotational friction coefficients .
-%   binner: bins a data array into uniform bin sizes using a user-defined
-%       bin type 
+%       rotational friction coefficients 
+%   binner: bins a data array into uniform bin sizes using a user-defined bin type
 %   runs_and_tumble_figure: creates a figure with the frequency distribution
 %       of runs and tumbles in the input tracks.
-%   smooth_track: smooths track with a running mean, median or maximum
-%       according to value of variable method. 
 %
 % REFERENCES (sources):
 % Guadayol et al 2016

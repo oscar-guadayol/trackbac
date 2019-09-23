@@ -1,6 +1,6 @@
 function [boundary_threshold, particle_threshold] =...
     threshold_level(V, background, maxV, minV, frames,...
-    minimum_area, pixels_range, denoise)
+    minimum_area, pixels_range, scaling, complement, noholes, ext)
 
 % This function allows the user to interactively determine the boundary and
 % particle thresholds of a given video.
@@ -26,8 +26,16 @@ function [boundary_threshold, particle_threshold] =...
 %       pixels_range is a 2X2 matrix with matrix indexes for the
 %          portion of the video frames to be used in the analyses. Useful
 %          to cut off information.
-% 
-%       denoise is a logical variable. Id true, each frame is denoised.
+%
+%       complement is a logical variable. If true, images are inverted
+%           using imcomplement. Useful for light particles on dark field,
+%           such as fluorescent images. 
+%
+%       noholes is a logic variable. If true, bwboundaries searches for
+%           object (parent and child) boundaries. This can provide better
+%           performance. If false, bwboundaries searches for both object
+%           and hole boundaries. Default is false.
+%
 %
 % output variables:
 %
@@ -68,15 +76,27 @@ function [boundary_threshold, particle_threshold] =...
 %  geometrically characterize and track swimming bacteria imaged by a
 %  phase-contrast microscope
 
-if strcmp(class(V),'VideoReader') % video
+if strcmpi(ext,'.avi')
+%     strcmp(class(V),'VideoReader') % video
     ff = frames(1);
     I = read(V,ff);
 elseif size(V,3)>1 % stack of images
     ff = frames(1);
     I = V(:,:,ff);
-elseif isstruct(V) % multitiff
+elseif strcmpi(ext, '.tif') ||strcmpi(ext, '.tiff') 
+%     isstruct(V) % multitiff
     ff = frames(1);
     I = imread(V(1).Filename,ff);
+    if V(1).BitDepth==16
+        if ~isempty(regexp(V(1).ImageDescription,'Hamamatsu', 'once'))
+            I = uint8(bitshift(I,-4)); % in fact, when the V.Bitdepth =16 in a hamamatsu multitif, the bitdepth=12
+        else
+            I = uint8(I);
+        end
+    end
+elseif strcmpi(ext, '.mat')
+    ff = frames(1);
+    I = imread([V.path_name, char(V.fns(ff))]);
 else % single image
     I = V;
 end
@@ -88,46 +108,51 @@ if nargin<2 || isempty(background)
 end
 
 %% initialize outputs
-pI = image_normalization(I, background, minV, maxV, denoise);
-m = uint8(mean(pI(:)));
-boundary_threshold = m/2;
+if complement
+%     background = imcomplement(background);
+    I = imcomplement(I);
+end
+[pI, I] = image_normalization(I, background, minV, maxV, scaling);
+% pI = imadjust(pI);
+% m = uint8(mean(pI(:)));
+m = uint8(graythresh(pI(:))*255);
+boundary_threshold = m;
 particle_threshold = boundary_threshold;
 boundaries = {};
 
 %% figure
-f = figure;
-warning('off','MATLAB:HandleGraphics:ObsoletedProperty:JavaFrame');
-jFrame = get(f,'JavaFrame'); % from http://undocumentedmatlab.com/blog/minimize-maximize-figure-window
-pause(0.1)
-jFrame.setMaximized(true);
-pause(0.1)
+f = figure('units','normalized','outerposition',[0 0 1 1]);
+drawnow
+
+set(f,'units', 'pixels')
 p = get(f, 'position');
 a = [p(3)-500 p(4)-350]./size(I);
 if a(1)>a(2)
-    hax(1) = axes('units', 'pixels',...
-        'position',[p(1)+100 p(2)+150 p(3)-250 (p(4)-250)*size(2)/size(1)]);
+    hax(1) = axes('units', 'pixels');%,...
+        set(hax(1),'position',[100 150 p(3)-300 (p(4)-250)*size(2)/size(1)]);
     Panel = uipanel('BackgroundColor','white',...
-        'Units','pixels',...
-        'Position',[p(1)+p(3)-300 p(2)+150 100 (p(4)-250)*size(2)/size(1)]);
+        'Units','pixels');%,...
+        set(Panel,'Position',[p(3)-150 150 100 (p(4)-250)*size(2)/size(1)]);
 else
     hax(1) = axes('units', 'pixels',...
-        'position',[p(1)+100 p(2)+150 (p(3)-250)*size(1)/size(2) p(4)-200]);
+        'position',[100 150 (p(3)-300)*size(1)/size(2) p(4)-200]);
     Panel = uipanel('BackgroundColor','white',...
         'Units','pixels',...
-        'Position',[p(1)+p(3)-300 p(2)+150 100 p(4)-200]);
+        'Position',[p(3)-150 150 100 p(4)-200]);
 end
-c = imshow(pI,'parent',hax(1));
+c = imshow(I,'parent',hax(1));
 hold(hax(1), 'all')
 h = plot(nan,nan,'b');
+cd
 slider(1) = uicontrol(Panel,'Style', 'slider',...
-    'Min',1,'Max',m,'Value',boundary_threshold,...
+    'Min',1,'Max',255,'Value',boundary_threshold,...
     'units', 'normalized',...
     'Position', [0.40 0.05 0.25 0.95],...
     'BackgroundColor',[0.5 0.2 0.2],...
     'Callback', {@slide,true});
 
 slider(2) = uicontrol(Panel,'Style', 'slider',...
-    'Min',1,'Max',m,'Value',particle_threshold,...
+    'Min',1,'Max',255,'Value',particle_threshold,...
     'SliderStep', [1/126 0.1],...
     'units', 'normalized',...
     'Position', [0.70 0.05 0.25 0.95],...
@@ -135,7 +160,7 @@ slider(2) = uicontrol(Panel,'Style', 'slider',...
     'Callback', {@slide,true});
 chk = uicontrol(Panel,'Style','checkbox','String', 'Dark','units','normalized','Position', [0 0  1 0.05],'value',false,'Callback',@slide);
 ticks = axes('Parent', Panel,'position',[0.40 0.07 0.01 0.907]);
-set(ticks,'box','off','xtick',[],'xcolor',get(f,'Color'),'color','none','ylim',[1 m], 'TickDir','out')
+set(ticks,'box','off','xtick',[],'xcolor',get(f,'Color'),'color','none','ylim',[1 255], 'TickDir','out')
 if strcmp(class(V),'VideoReader') || isstruct(V)
     positions = get(hax(1),'position');
     slider(3) = uicontrol('Style', 'slider',...
@@ -161,18 +186,41 @@ uiwait(f)
     function frame(varargin)
         block_figure
         ff = round(get(slider(3), 'Value'));
-        if strcmp(class(V),'VideoReader')
+        if strcmpi(ext,'.avi')
+            %     strcmp(class(V),'VideoReader') % video
             I = read(V,ff);
-        elseif isstruct(V)
+        elseif size(V,3)>1 % stack of images
+            ff = frames(1);
+            I = V(:,:,ff);
+            
+        elseif strcmpi(ext, '.tif') ||strcmpi(ext, '.tiff')
+            %     isstruct(V) % multitiff
             I = imread(V(1).Filename,ff);
+            if V(1).BitDepth==16
+                if ~isempty(regexp(V(1).ImageDescription,'Hamamatsu', 'once'))
+                    I = uint8(bitshift(I,-4)); % in fact, when the V.Bitdepth =16 in a hamamatsu multitif,the bitdepth=12
+                else
+                    I = uint8(I);
+                end
+            end
+        elseif strcmpi(ext, '.mat')
+%             ff = frames(1);
+            I = imread([V.path_name, char(V.fns(ff))]);
+            
         end
         
+        if complement
+            I = imcomplement(I);
+        end
         I = I(pixels_range(1,1):pixels_range(1,2),pixels_range(2,1):pixels_range(2,2));
-        pI = image_normalization(I,background,minV,maxV, denoise);
-        set(c,'Cdata', uint8(pI)); % replots the image to the next frame
+        [pI, I] = image_normalization(I,background,minV,maxV, scaling);
+%         pI = imadjust(pI);
+        set(c,'Cdata', uint8(I)); % replots the image to the next frame
         find_boundaries
         unblock_figure
     end
+
+    
 
 %% slide function
     function slide(varargin)
@@ -195,7 +243,8 @@ uiwait(f)
 
     function find_boundaries(varargin)
         if get(chk,'value')
-            boundaries = bwboundaries_noholes(pI, boundary_threshold, particle_threshold, minimum_area,true); % identifies only particles without holes
+            boundaries = bwboundaries_noholes(pI, boundary_threshold,...
+                particle_threshold, minimum_area, noholes); % identifies only particles without holes
         end
         replot
     end
